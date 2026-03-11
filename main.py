@@ -77,6 +77,31 @@ def extract_planet(planet_obj):
     }
 
 
+def extract_house_cusp(subject, house_attr, display_name):
+    """Extract a house cusp (ASC, MC, etc.) as a planet-like dict."""
+    try:
+        obj = getattr(subject, house_attr, None)
+        if obj is None:
+            return None
+        sign_raw = getattr(obj, 'sign', None)
+        sign = SIGN_MAP.get(sign_raw, sign_raw) if sign_raw else None
+        if not sign:
+            return None
+        return {
+            "name": display_name,
+            "sign": sign,
+            "sign_short": sign_raw,
+            "degree": round(getattr(obj, 'position', 0), 2),
+            "abs_degree": round(getattr(obj, 'abs_pos', 0), 2),
+            "house": HOUSE_MAP.get(house_attr, None),
+            "retrograde": False,
+            "element": getattr(obj, 'element', ''),
+            "quality": getattr(obj, 'quality', ''),
+        }
+    except Exception:
+        return None
+
+
 def build_chart(subject):
     """Build a clean chart dictionary from an AstrologicalSubject."""
     planets = {}
@@ -93,13 +118,48 @@ def build_chart(subject):
     # Try to get North Node
     north_node = getattr(subject, "mean_north_lunar_node", None)
     if north_node is None:
-        # Fallback for older versions
         try:
             north_node = getattr(subject, "mean_node", None)
         except:
             pass
     if north_node:
         planets["north_node"] = extract_planet(north_node)
+        # Calculate South Node (opposite of North Node — 180 degrees away)
+        nn_data = planets["north_node"]
+        sn_abs = (nn_data["abs_degree"] + 180) % 360
+        sn_degree_in_sign = sn_abs % 30
+        sign_index = int(sn_abs // 30)
+        signs_ordered = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo",
+                         "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"]
+        shorts = ["Ari", "Tau", "Gem", "Can", "Leo", "Vir", "Lib", "Sco", "Sag", "Cap", "Aqu", "Pis"]
+        elements = ["Fire", "Earth", "Air", "Water", "Fire", "Earth", "Air", "Water", "Fire", "Earth", "Air", "Water"]
+        qualities = ["Cardinal", "Fixed", "Mutable", "Cardinal", "Fixed", "Mutable",
+                     "Cardinal", "Fixed", "Mutable", "Cardinal", "Fixed", "Mutable"]
+        planets["south_node"] = {
+            "name": "South Node",
+            "sign": signs_ordered[sign_index],
+            "sign_short": shorts[sign_index],
+            "degree": round(sn_degree_in_sign, 2),
+            "abs_degree": round(sn_abs, 2),
+            "house": None,
+            "retrograde": False,
+            "element": elements[sign_index],
+            "quality": qualities[sign_index],
+        }
+
+    # House cusps — Ascendant, IC, Descendant, Midheaven
+    asc = extract_house_cusp(subject, "first_house", "Ascendant")
+    if asc:
+        planets["ascendant"] = asc
+    ic = extract_house_cusp(subject, "fourth_house", "IC")
+    if ic:
+        planets["ic"] = ic
+    dsc = extract_house_cusp(subject, "seventh_house", "Descendant")
+    if dsc:
+        planets["descendant"] = dsc
+    mc = extract_house_cusp(subject, "tenth_house", "Midheaven")
+    if mc:
+        planets["midheaven"] = mc
 
     return planets
 
