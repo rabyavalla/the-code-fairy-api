@@ -64,17 +64,20 @@ def extract_planet(planet_obj):
     """Extract clean planet data from a Kerykeion planet object."""
     if planet_obj is None:
         return None
-    return {
-        "name": planet_obj.name,
-        "sign": SIGN_MAP.get(planet_obj.sign, planet_obj.sign),
-        "sign_short": planet_obj.sign,
-        "degree": round(planet_obj.position, 2),
-        "abs_degree": round(planet_obj.abs_pos, 2),
-        "house": HOUSE_MAP.get(planet_obj.house, planet_obj.house),
-        "retrograde": planet_obj.retrograde,
-        "element": planet_obj.element,
-        "quality": planet_obj.quality,
-    }
+    try:
+        return {
+            "name": getattr(planet_obj, 'name', 'Unknown'),
+            "sign": SIGN_MAP.get(getattr(planet_obj, 'sign', ''), getattr(planet_obj, 'sign', '')),
+            "sign_short": getattr(planet_obj, 'sign', ''),
+            "degree": round(getattr(planet_obj, 'position', 0), 2),
+            "abs_degree": round(getattr(planet_obj, 'abs_pos', 0), 2),
+            "house": HOUSE_MAP.get(getattr(planet_obj, 'house', ''), getattr(planet_obj, 'house', None)),
+            "retrograde": getattr(planet_obj, 'retrograde', False),
+            "element": getattr(planet_obj, 'element', ''),
+            "quality": getattr(planet_obj, 'quality', ''),
+        }
+    except Exception:
+        return None
 
 
 def extract_house_cusp(subject, house_attr, display_name):
@@ -115,16 +118,37 @@ def build_chart(subject):
         if obj:
             planets[name] = extract_planet(obj)
 
-    # Try to get North Node
-    north_node = getattr(subject, "mean_north_lunar_node", None)
-    if north_node is None:
+    # Try to get North Node (multiple attribute name attempts for different Kerykeion versions)
+    north_node = None
+    for attr in ["mean_north_lunar_node", "true_north_lunar_node", "mean_node", "true_node"]:
         try:
-            north_node = getattr(subject, "mean_node", None)
-        except:
-            pass
+            north_node = getattr(subject, attr, None)
+            if north_node and hasattr(north_node, 'sign'):
+                break
+            north_node = None
+        except Exception:
+            north_node = None
     if north_node:
-        planets["north_node"] = extract_planet(north_node)
-        # Calculate South Node (opposite of North Node — 180 degrees away)
+        nn = extract_planet(north_node)
+        if nn:
+            planets["north_node"] = nn
+
+    # Try to get South Node directly from Kerykeion
+    south_node = None
+    for attr in ["mean_south_lunar_node", "true_south_lunar_node", "mean_south_node", "true_south_node"]:
+        try:
+            south_node = getattr(subject, attr, None)
+            if south_node and hasattr(south_node, 'sign'):
+                break
+            south_node = None
+        except Exception:
+            south_node = None
+    if south_node:
+        sn = extract_planet(south_node)
+        if sn:
+            planets["south_node"] = sn
+    elif "north_node" in planets:
+        # Calculate South Node from North Node (180 degrees opposite)
         nn_data = planets["north_node"]
         sn_abs = (nn_data["abs_degree"] + 180) % 360
         sn_degree_in_sign = sn_abs % 30
@@ -168,7 +192,28 @@ def build_chart(subject):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "the-code-fairy-api", "version": "1.0.0"}
+    return {"status": "ok", "service": "the-code-fairy-api", "version": "1.1.0"}
+
+
+@app.get("/debug-attrs")
+def debug_attrs():
+    """Debug: show available attributes for node detection."""
+    try:
+        s = AstrologicalSubject("Debug", 2000, 1, 1, 12, 0, "New York", "US", zodiac_type="Tropic")
+        node_attrs = [a for a in dir(s) if 'node' in a.lower() or 'lunar' in a.lower()]
+        results = {}
+        for a in node_attrs:
+            try:
+                obj = getattr(s, a, None)
+                if obj and hasattr(obj, 'sign'):
+                    results[a] = {"sign": obj.sign, "position": round(obj.position, 2)}
+                elif obj and not callable(obj):
+                    results[a] = str(obj)[:100]
+            except Exception as e:
+                results[a] = f"error: {str(e)}"
+        return {"node_attrs": node_attrs, "values": results}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.post("/chart")
