@@ -471,12 +471,13 @@ def calculate_chart(req: ChartRequest):
             zodiac_type="Tropic",
         )
 
-        # Sidereal chart (Vedic astrology — "The Depths")
+        # Sidereal chart — "The Constellations"
+        # Using FAGAN_BRADLEY ayanamsa which matches standard Western sidereal calculations
         sidereal = AstrologicalSubject(
             req.name, req.year, req.month, req.day, req.hour, req.minute,
             req.city, req.country,
             zodiac_type="Sidereal",
-            sidereal_mode="LAHIRI",
+            sidereal_mode="FAGAN_BRADLEY",
         )
 
         tropical_chart = build_chart(tropical)
@@ -517,7 +518,7 @@ def get_transits():
             "Transit", now.year, now.month, now.day, now.hour, now.minute,
             "Greenwich", "GB",
             zodiac_type="Sidereal",
-            sidereal_mode="LAHIRI",
+            sidereal_mode="FAGAN_BRADLEY",
         )
 
         return {
