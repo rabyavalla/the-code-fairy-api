@@ -2564,7 +2564,15 @@ def _build_chart_context(req: FairyAskRequest) -> str:
         # Moon phase
         sun_abs = getattr(transits.sun, 'abs_pos', 0) if hasattr(transits, 'sun') else 0
         moon_abs = getattr(transits.moon, 'abs_pos', 0) if hasattr(transits, 'moon') else 0
-        moon_phase = calculate_moon_phase(sun_abs, moon_abs)
+        moon_phase_raw = calculate_moon_phase(sun_abs, moon_abs)
+        # calculate_moon_phase returns a string, not a dict
+        import math
+        moon_angle = (moon_abs - sun_abs) % 360
+        illumination = round((1 - math.cos(math.radians(moon_angle))) / 2 * 100, 1)
+        if isinstance(moon_phase_raw, str):
+            moon_phase = {"phase_name": moon_phase_raw, "illumination": illumination}
+        else:
+            moon_phase = moon_phase_raw
 
         # Active retrogrades
         today = now.date()
@@ -2608,45 +2616,6 @@ ACTIVE RETROGRADES:
         tb = traceback.format_exc()
         logging.error(f"Chart context build failed: {tb}")
         return f"Chart calculation error: {str(e)}. Birth data may be incomplete."
-
-
-@app.get("/fairy/test-chart")
-def fairy_test_chart():
-    """Temporary debug: test chart context building with full traceback."""
-    import traceback
-    try:
-        req = FairyAskRequest(
-            question="test", name="TestUser", year=1995, month=6, day=15,
-            hour=14, minute=30, city="New York", country="US"
-        )
-        # Step-by-step to find the exact failure
-        natal = AstrologicalSubject(
-            req.name or "User", req.year, req.month, req.day,
-            req.hour or 12, req.minute or 0,
-            req.city or "New York", req.country or "US",
-            zodiac_type="Tropic",
-        )
-        chart = build_chart(natal)
-
-        # Check what type each key is
-        type_report = {}
-        planet_keys = ['sun', 'moon', 'mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'pluto', 'north_node', 'chiron', 'ascendant', 'midheaven']
-        for key in planet_keys:
-            val = chart.get(key)
-            type_report[key] = f"{type(val).__name__}: {str(val)[:80]}" if val else "None"
-
-        # Also try the full context
-        ctx = _build_chart_context(req)
-        return {
-            "success": True,
-            "chart_type": type(chart).__name__,
-            "chart_keys": list(chart.keys())[:20],
-            "planet_types": type_report,
-            "context_preview": ctx[:300],
-            "has_error": "error" in ctx.lower()
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e), "traceback": traceback.format_exc()[-1500:]}
 
 
 def _call_anthropic(system: str, messages: list) -> str:
