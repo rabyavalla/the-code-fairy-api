@@ -1476,6 +1476,196 @@ def _ordinal(n):
     return f"{n}{suffix}"
 
 
+# Moon phase guidance for each phase
+MOON_PHASE_GUIDANCE = {
+    "new moon": {
+        "energy": "Seeds & Intentions",
+        "message": "The sky is dark and fertile. This is your blank page — set intentions, plant seeds, begin what you've been dreaming about. The universe is listening.",
+        "do": "Journal your intentions, start new projects, set goals, meditate on what you want to call in",
+        "avoid": "Launching publicly, making big announcements, forcing outcomes",
+    },
+    "waxing crescent": {
+        "energy": "Emerging Momentum",
+        "message": "Your intentions are taking root beneath the surface. Stay committed even when you can't see results yet. Faith fuels growth.",
+        "do": "Take small first steps, gather resources, build momentum, affirm your direction",
+        "avoid": "Giving up too soon, comparing your beginning to someone else's middle",
+    },
+    "first quarter": {
+        "energy": "Challenge & Commitment",
+        "message": "Resistance arrives to test your resolve. This tension is not a sign to stop — it's the universe asking: how badly do you want this?",
+        "do": "Push through obstacles, make decisions, take action despite doubt, adjust your approach",
+        "avoid": "Abandoning plans at the first sign of difficulty, people-pleasing over your own goals",
+    },
+    "waxing gibbous": {
+        "energy": "Refinement & Trust",
+        "message": "Almost there. Fine-tune, adjust, and trust the process. The details matter now. Polish what you've been building.",
+        "do": "Edit, refine, perfect your work, seek feedback, make final adjustments",
+        "avoid": "Perfectionism that prevents progress, starting something entirely new",
+    },
+    "full moon": {
+        "energy": "Illumination & Release",
+        "message": "Everything is lit up. Emotions run high, truths are revealed, and what's been building reaches a peak. Celebrate what's working. Release what isn't.",
+        "do": "Celebrate wins, release what no longer serves you, have honest conversations, charge your crystals",
+        "avoid": "Making impulsive decisions from heightened emotions, clinging to what needs to go",
+    },
+    "waning gibbous": {
+        "energy": "Gratitude & Sharing",
+        "message": "The harvest is in. Share your wisdom, express gratitude, and give back. You've learned something valuable — pass it on.",
+        "do": "Share knowledge, mentor others, practice gratitude, distribute what you've gathered",
+        "avoid": "Hoarding resources or knowledge, starting major new ventures",
+    },
+    "last quarter": {
+        "energy": "Letting Go",
+        "message": "Time to clear the field. Release old habits, relationships, and beliefs that have run their course. Make space for what's next.",
+        "do": "Declutter physically and emotionally, forgive, end what's complete, tie up loose ends",
+        "avoid": "Starting new things, holding on to what's clearly finished",
+    },
+    "waning crescent": {
+        "energy": "Rest & Surrender",
+        "message": "The quietest phase. Rest deeply, dream, and surrender. The void before the new moon is sacred — don't fill it with noise.",
+        "do": "Rest, sleep, meditate, take baths, dream, be still, reflect on the full cycle",
+        "avoid": "Overworking, forcing productivity, making major commitments",
+    },
+}
+
+# Planetary ingress data 2025-2027 (when planets change signs)
+INGRESS_DATA = [
+    # 2025
+    {"date": "2025-03-20", "planet": "Sun", "sign": "Aries", "message": "Spring equinox — the astrological new year begins. Fresh starts, bold energy, and the courage to initiate."},
+    {"date": "2025-04-19", "planet": "Sun", "sign": "Taurus", "message": "Slow down and savor. Taurus season grounds you in your body, your values, and what genuinely nourishes you."},
+    {"date": "2025-05-20", "planet": "Sun", "sign": "Gemini", "message": "Curiosity awakens. Gemini season brings new conversations, ideas, and connections. Stay playful."},
+    {"date": "2025-05-25", "planet": "Jupiter", "sign": "Cancer", "message": "Jupiter enters Cancer — a once-in-12-years expansion of home, family, emotional security, and nurturing. A deeply fertile year begins."},
+    {"date": "2025-06-20", "planet": "Sun", "sign": "Cancer", "message": "Summer solstice. Cancer season turns you inward toward home, roots, and emotional truth."},
+    {"date": "2025-07-06", "planet": "Uranus", "sign": "Gemini", "message": "Uranus enters Gemini for the first time since 1949. Seven years of revolution in communication, media, AI, and how we think. Everything changes."},
+    {"date": "2025-07-22", "planet": "Sun", "sign": "Leo", "message": "Leo season: your heart wants to be seen. Create, play, love boldly, and let your light be unapologetic."},
+    {"date": "2025-08-22", "planet": "Sun", "sign": "Virgo", "message": "Virgo season refines and heals. Tend to your body, your routines, and the sacred details of daily life."},
+    {"date": "2025-09-22", "planet": "Sun", "sign": "Libra", "message": "Autumn equinox — Libra season seeks harmony, beauty, and balanced partnerships. What needs rebalancing in your life?"},
+    {"date": "2025-10-22", "planet": "Sun", "sign": "Scorpio", "message": "The veil thins. Scorpio season invites you into depth, intimacy, transformation, and the power of what's hidden."},
+    {"date": "2025-11-21", "planet": "Sun", "sign": "Sagittarius", "message": "Adventure calls. Sagittarius season expands your horizons through travel, philosophy, and unshakeable faith."},
+    {"date": "2025-12-21", "planet": "Sun", "sign": "Capricorn", "message": "Winter solstice. Capricorn season builds your legacy. What are you willing to work for with quiet, relentless devotion?"},
+    # 2026
+    {"date": "2026-01-19", "planet": "Sun", "sign": "Aquarius", "message": "Aquarius season electrifies your vision for the future. Think bigger, think weirder, think for the collective."},
+    {"date": "2026-02-18", "planet": "Sun", "sign": "Pisces", "message": "Pisces season dissolves boundaries. Dream, create, heal, and let the mystical in. The zodiac year is ending — reflect."},
+    {"date": "2026-02-13", "planet": "Saturn", "sign": "Aries", "message": "Saturn enters Aries — a new 29-year disciplinary cycle begins. Mastering initiative, courage, and self-authority becomes the work."},
+    {"date": "2026-03-20", "planet": "Sun", "sign": "Aries", "message": "Spring equinox and astrological new year. Aries season ignites your willpower and your willingness to begin again."},
+    {"date": "2026-03-30", "planet": "Neptune", "sign": "Aries", "message": "Neptune enters Aries for the first time since 1874. A new 14-year dream cycle begins — the collective imagination is reborn with warrior spirit."},
+    {"date": "2026-04-19", "planet": "Sun", "sign": "Taurus", "message": "Taurus season grounds the fiery spring energy. Return to your senses, your values, your garden."},
+    {"date": "2026-05-20", "planet": "Sun", "sign": "Gemini", "message": "Gemini season opens the doors of perception. New ideas, conversations, and mental adventures await."},
+    {"date": "2026-06-09", "planet": "Jupiter", "sign": "Leo", "message": "Jupiter enters Leo — 12 months of expanded creativity, romance, generosity, and joyful self-expression. Your heart grows three sizes."},
+    {"date": "2026-06-20", "planet": "Sun", "sign": "Cancer", "message": "Summer solstice. Cancer season holds you close. Nurture what matters and let yourself be held."},
+    {"date": "2026-07-22", "planet": "Sun", "sign": "Leo", "message": "Leo season with Jupiter in Leo — this is a once-in-12-years portal for creative breakthroughs and heart-led living."},
+    {"date": "2026-08-22", "planet": "Sun", "sign": "Virgo", "message": "Virgo season brings integration. After Leo's fire, now refine, heal, and serve with precision."},
+    {"date": "2026-09-22", "planet": "Sun", "sign": "Libra", "message": "Autumn equinox. Libra season rebalances your relationships and your relationship with beauty and justice."},
+    {"date": "2026-10-22", "planet": "Sun", "sign": "Scorpio", "message": "Scorpio season dives deep. Face what you've been avoiding — the treasure is always guarded by the dragon."},
+    {"date": "2026-11-21", "planet": "Sun", "sign": "Sagittarius", "message": "Sagittarius season launches arrows of meaning into the sky. Where is your truth pointing you?"},
+    {"date": "2026-12-21", "planet": "Sun", "sign": "Capricorn", "message": "Winter solstice and Capricorn season. The mountain is yours to climb. Every step counts."},
+]
+
+
+@app.get("/forecast/lunar-phases")
+def get_lunar_phases():
+    """
+    Get current moon phase with rich guidance, plus upcoming new and full moons.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        transits = AstrologicalSubject(
+            "Transit", now.year, now.month, now.day, now.hour, now.minute,
+            "Greenwich", "GB", zodiac_type="Tropic",
+        )
+
+        sun_abs = getattr(transits.sun, 'abs_pos', 0) if transits.sun else 0
+        moon_abs = getattr(transits.moon, 'abs_pos', 0) if transits.moon else 0
+        moon_sign = SIGN_MAP.get(getattr(transits.moon, 'sign', ''), '') if transits.moon else ''
+        moon_pos = getattr(transits.moon, 'position', 0) if transits.moon else 0
+
+        phase = calculate_moon_phase(sun_abs, moon_abs)
+        guidance = MOON_PHASE_GUIDANCE.get(phase, {})
+
+        # Calculate moon illumination percentage
+        angle = (moon_abs - sun_abs) % 360
+        illumination = round((1 - abs(180 - angle) / 180) * 100)
+        # More accurate: use cosine
+        import math
+        illumination = round((1 - math.cos(math.radians(angle))) / 2 * 100)
+
+        # Calculate days until next new and full moon
+        # New moon = sun-moon angle of 0, Full moon = 180
+        moon_daily = 13.2 - 1.0  # Moon motion minus sun motion
+        angle_to_new = (360 - angle) % 360
+        angle_to_full = (180 - angle) % 360
+        days_to_new = round(angle_to_new / moon_daily, 1)
+        days_to_full = round(angle_to_full / moon_daily, 1)
+
+        degree_info = format_degrees(moon_pos)
+
+        return {
+            "success": True,
+            "timestamp": now.isoformat(),
+            "current_moon": {
+                "phase": phase,
+                "sign": moon_sign,
+                "degree": degree_info["degree_formatted"],
+                "illumination_pct": illumination,
+            },
+            "guidance": {
+                "energy": guidance.get("energy", ""),
+                "message": guidance.get("message", ""),
+                "do": guidance.get("do", ""),
+                "avoid": guidance.get("avoid", ""),
+            },
+            "upcoming": {
+                "days_to_new_moon": days_to_new,
+                "days_to_full_moon": days_to_full,
+            },
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lunar phase forecast failed: {str(e)}")
+
+
+@app.get("/forecast/ingresses")
+def get_upcoming_ingresses():
+    """
+    Get upcoming planetary sign changes (ingresses) for the next 90 days.
+    Major ingresses (Jupiter, Saturn, Uranus, Neptune, Pluto) shown for next 12 months.
+    """
+    try:
+        now = datetime.now(timezone.utc).date()
+        results = []
+
+        for entry in INGRESS_DATA:
+            edate = datetime.strptime(entry["date"], "%Y-%m-%d").date()
+            if edate < now:
+                continue
+
+            # Sun ingresses: 90 day window. Outer planets: 365 day window.
+            is_major = entry["planet"] not in ("Sun", "Mercury", "Venus", "Mars")
+            window = 365 if is_major else 90
+            if edate > now + timedelta(days=window):
+                continue
+
+            results.append({
+                "date": entry["date"],
+                "planet": entry["planet"],
+                "sign": entry["sign"],
+                "message": entry["message"],
+                "is_major": is_major,
+                "days_until": (edate - now).days,
+            })
+
+        results.sort(key=lambda x: x["date"])
+
+        return {
+            "success": True,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "ingresses": results,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ingress forecast failed: {str(e)}")
+
+
 # ─── Run ───────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
