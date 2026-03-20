@@ -269,7 +269,13 @@ def build_chart(subject):
     if mc:
         planets["midheaven"] = mc
 
-    return planets
+    # Get all 12 house cusps for chart rendering
+    house_cusps = get_all_house_cusps(subject)
+
+    # Return planets as top-level keys + house_cusps as a separate key
+    result = dict(planets)
+    result["_house_cusps"] = house_cusps
+    return result
 
 
 # ─── Helper Functions for New Endpoints ────────
@@ -483,6 +489,10 @@ def calculate_chart(req: ChartRequest):
         tropical_chart = build_chart(tropical)
         sidereal_chart = build_chart(sidereal)
 
+        # Extract house cusps for chart rendering
+        tropical_cusps = tropical_chart.pop("_house_cusps", {})
+        sidereal_cusps = sidereal_chart.pop("_house_cusps", {})
+
         return {
             "success": True,
             "birth_data": {
@@ -494,6 +504,10 @@ def calculate_chart(req: ChartRequest):
             },
             "tropical": tropical_chart,
             "sidereal": sidereal_chart,
+            "house_cusps": {
+                "tropical": {str(k): v for k, v in tropical_cusps.items()},
+                "sidereal": {str(k): v for k, v in sidereal_cusps.items()},
+            },
         }
 
     except Exception as e:
@@ -521,11 +535,18 @@ def get_transits():
             sidereal_mode="FAGAN_BRADLEY",
         )
 
+        tropical_chart = build_chart(tropical)
+        sidereal_chart = build_chart(sidereal)
+
+        # Remove internal house cusps from transit response
+        tropical_chart.pop("_house_cusps", None)
+        sidereal_chart.pop("_house_cusps", None)
+
         return {
             "success": True,
             "timestamp": now.isoformat(),
-            "tropical": build_chart(tropical),
-            "sidereal": build_chart(sidereal),
+            "tropical": tropical_chart,
+            "sidereal": sidereal_chart,
         }
 
     except Exception as e:
