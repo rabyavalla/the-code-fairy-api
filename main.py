@@ -2063,6 +2063,383 @@ def get_cosmic_news():
         raise HTTPException(status_code=500, detail=f"Cosmic news correlation failed: {str(e)}")
 
 
+# ═══════════════════════════════════════════════════════════════════
+# PREDICTIVE ENGINE — Forward-Looking Cosmic Predictions
+# ═══════════════════════════════════════════════════════════════════
+
+# Historical context — what happened when these transits last occurred
+HISTORICAL_PATTERNS = {
+    # Planet-in-sign historical data
+    ("Pluto", "Aquarius"): {
+        "last_transit": "1778–1798",
+        "events": [
+            "The American and French Revolutions — total overthrow of power structures",
+            "The Industrial Revolution accelerated — technology reshaped society",
+            "The Enlightenment peaked — reason, science, and collective ideals over monarchy",
+        ],
+        "theme": "Revolution in power, technology, and collective governance",
+    },
+    ("Neptune", "Aries"): {
+        "last_transit": "1861–1875",
+        "events": [
+            "The American Civil War — a fight for ideals of freedom and identity",
+            "Rise of nationalism and independence movements across Europe",
+            "The birth of the Red Cross — compassion applied to warfare",
+        ],
+        "theme": "Collective dreams channeled through identity, independence, and warrior compassion",
+    },
+    ("Uranus", "Gemini"): {
+        "last_transit": "1942–1949",
+        "events": [
+            "The invention of the first computers (ENIAC, Colossus)",
+            "The birth of the United Nations — new global communication",
+            "Television went mainstream — total revolution in media and information",
+        ],
+        "theme": "Revolution in communication technology, media, and how information flows",
+    },
+    ("Saturn", "Aries"): {
+        "last_transit": "1996–1999",
+        "events": [
+            "Rise of dotcom entrepreneurship — discipline applied to bold new ventures",
+            "Kosovo conflict — hard lessons about military intervention",
+            "Corporate governance reforms — authority and accountability in leadership",
+        ],
+        "theme": "Mastering initiative, learning discipline in leadership, and structural courage",
+    },
+    ("Saturn", "Pisces"): {
+        "last_transit": "1993–1996",
+        "events": [
+            "Healthcare reform debates in the US — structuring compassion",
+            "The rise of antidepressants (Prozac era) — material approach to emotional health",
+            "End of apartheid in South Africa — dissolving structures of separation",
+        ],
+        "theme": "Building real structures around healing, compassion, and collective surrender",
+    },
+    ("Jupiter", "Cancer"): {
+        "last_transit": "2013–2014",
+        "events": [
+            "Affordable Care Act expansion — growth in healthcare/family protection",
+            "Housing markets recovered — real estate expansion",
+            "Immigration policy became a central cultural debate",
+        ],
+        "theme": "Expansion in home, family, food security, and emotional nurturing at scale",
+    },
+    ("Jupiter", "Leo"): {
+        "last_transit": "2014–2015",
+        "events": [
+            "Social media influencer culture exploded — self-expression as currency",
+            "Marriage equality legalized in the US — love wins",
+            "Streaming entertainment (Netflix) disrupted Hollywood — creative renaissance",
+        ],
+        "theme": "Expansion in creativity, entertainment, romance, and joyful self-expression",
+    },
+    # Retrograde themes by planet (general)
+    ("Mercury", "retrograde"): {
+        "last_transit": "Occurs 3-4x yearly",
+        "events": [
+            "Technology glitches, travel delays, and communication breakdowns",
+            "Old friends, exes, and unfinished conversations resurface",
+            "Contracts signed during Mercury retrograde often need revision",
+        ],
+        "theme": "Review, revisit, revise — the universe's editing period",
+    },
+    ("Venus", "retrograde"): {
+        "last_transit": "Occurs every 18 months",
+        "events": [
+            "Market corrections and financial reassessments",
+            "Past relationships and old values resurface for review",
+            "Cultural shifts in what we find beautiful or worthy",
+        ],
+        "theme": "Reassessing love, money, and what we truly value",
+    },
+}
+
+# Specific prediction templates for planet+sign+event_type combos
+def _generate_predictions(days_ahead=60):
+    """Generate dated predictions based on upcoming astrological events."""
+    now = datetime.now(timezone.utc).date()
+    window_end = now + timedelta(days=days_ahead)
+    predictions = []
+    pred_id = 0
+
+    # ── Retrograde predictions ──
+    for planet, start_str, end_str, sign_start, sign_end in RETROGRADE_DATA:
+        start = datetime.strptime(start_str, "%Y-%m-%d").date()
+        end = datetime.strptime(end_str, "%Y-%m-%d").date()
+
+        # Skip if entirely past or too far future
+        if end < now or start > window_end:
+            continue
+
+        domains = PLANET_NEWS_DOMAINS.get(planet, {})
+        topics = domains.get("topics", [])
+        mundane = domains.get("mundane", "")
+        sign_theme = SIGN_MUNDANE_THEMES.get(sign_start, "")
+
+        days_until = max(0, (start - now).days)
+        is_active = start <= now <= end
+
+        # Historical context
+        hist_key = (planet, "retrograde")
+        historical = HISTORICAL_PATTERNS.get(hist_key, None)
+
+        # Generate specific predictions
+        planet_predictions = []
+
+        if planet == "Mercury":
+            planet_predictions = [
+                f"Expect technology disruptions — app outages, software bugs, and miscommunications between {start_str} and {end_str}",
+                f"Travel delays and transportation issues likely, especially around {sign_start}-themed contexts ({sign_theme})",
+                f"Old contacts, conversations, and unfinished projects from the past will resurface for review",
+                f"Contracts and agreements signed in this window may need revision — double-check everything",
+            ]
+        elif planet == "Venus":
+            planet_predictions = [
+                f"Financial markets may face turbulence or correction between {start_str} and {end_str}",
+                f"Cultural conversations about beauty standards, art, and what we value will intensify",
+                f"Past relationships or old patterns around money and love resurface for examination",
+                f"Diplomacy between nations may stall or require renegotiation during this window",
+            ]
+        elif planet == "Mars":
+            planet_predictions = [
+                f"Increased tensions, protests, or military escalations between {start_str} and {end_str}",
+                f"Sports scandals or unexpected upsets in major competitions",
+                f"Industrial and energy sector disruptions — supply chain issues likely",
+                f"Collective frustration simmers; previously suppressed anger may erupt publicly",
+            ]
+        elif planet == "Jupiter":
+            planet_predictions = [
+                f"Legal and judicial systems face review — landmark cases may be revisited",
+                f"International relations slow down; treaties and agreements delayed",
+                f"Higher education and religious institutions undergo internal examination",
+                f"The collective pauses on expansion to ask: are we growing in the right direction?",
+            ]
+        elif planet == "Saturn":
+            planet_predictions = [
+                f"Government structures face pressure — policy rollbacks or institutional reviews likely",
+                f"Infrastructure vulnerabilities exposed — bridges, systems, and regulations tested",
+                f"Authority figures face accountability; leaders may step down or face scrutiny",
+                f"Regulatory frameworks are questioned — are the rules actually working?",
+            ]
+        elif planet in ("Uranus", "Neptune", "Pluto"):
+            planet_predictions = [
+                f"{planet} retrograde is generational — internal shifts in {mundane.lower()} unfold slowly",
+                f"Themes from earlier in the year around {sign_theme} will be revisited and integrated",
+                f"What seemed like a breakthrough earlier may need refinement before its next evolution",
+            ]
+        else:
+            planet_predictions = [
+                f"{planet} retrograde activates review in {mundane.lower()} between {start_str} and {end_str}",
+            ]
+
+        pred_id += 1
+        predictions.append({
+            "id": f"retro_{planet.lower()}_{start_str}",
+            "type": "retrograde",
+            "planet": planet,
+            "sign": sign_start,
+            "start_date": start_str,
+            "end_date": end_str,
+            "days_until": days_until,
+            "is_active": is_active,
+            "headline": f"{planet} Retrograde in {sign_start}",
+            "date_range": f"{start_str} to {end_str}",
+            "domain": mundane,
+            "predictions": planet_predictions,
+            "watch_for": topics[:5],
+            "historical": historical,
+        })
+
+    # ── Eclipse predictions ──
+    for eclipse in ECLIPSE_DATA:
+        edate = datetime.strptime(eclipse["date"], "%Y-%m-%d").date()
+        if edate < now - timedelta(days=3) or edate > window_end:
+            continue
+
+        sign = eclipse["sign"]
+        sign_theme = SIGN_MUNDANE_THEMES.get(sign, "")
+        is_solar = "solar" in eclipse["type"]
+        days_until = max(0, (edate - now).days)
+        is_active = abs((edate - now).days) <= 5  # Eclipse window ±5 days
+
+        eclipse_predictions = []
+        if is_solar:
+            eclipse_predictions = [
+                f"New beginnings in {sign_theme} — expect announcements, launches, and fresh directions around {eclipse['date']}",
+                f"Leadership changes or bold new initiatives emerge in the public sphere",
+                f"Events that occur this week feel 'fated' — they set the direction for the next 6 months",
+                f"What you start now carries unusual momentum — the universe is co-signing new paths in {sign}",
+            ]
+        else:
+            eclipse_predictions = [
+                f"Emotional revelations and hidden truths surface around {eclipse['date']}",
+                f"Something that's been building behind the scenes becomes impossible to ignore",
+                f"Collective emotional release — public figures may face revelations or endings",
+                f"What needs to be released will make itself known; endings that lead to new space",
+            ]
+
+        pred_id += 1
+        predictions.append({
+            "id": f"eclipse_{eclipse['type']}_{eclipse['date']}",
+            "type": "eclipse",
+            "planet": "Sun" if is_solar else "Moon",
+            "sign": sign,
+            "start_date": eclipse["date"],
+            "end_date": eclipse["date"],
+            "days_until": days_until,
+            "is_active": is_active,
+            "headline": f'{eclipse["type"].replace("_", " ").title()} in {sign}',
+            "date_range": eclipse["date"],
+            "domain": eclipse["theme"],
+            "predictions": eclipse_predictions,
+            "watch_for": [s.strip() for s in sign_theme.split(",")][:4] if sign_theme else [],
+            "historical": None,
+        })
+
+    # ── Major ingress predictions ──
+    for entry in INGRESS_DATA:
+        edate = datetime.strptime(entry["date"], "%Y-%m-%d").date()
+        if edate < now or edate > window_end:
+            continue
+        # Only major planet ingresses (not Sun seasons)
+        if entry["planet"] in ("Sun", "Mercury", "Venus", "Mars"):
+            continue
+
+        planet = entry["planet"]
+        sign = entry["sign"]
+        sign_theme = SIGN_MUNDANE_THEMES.get(sign, "")
+        domains = PLANET_NEWS_DOMAINS.get(planet, {})
+        mundane = domains.get("mundane", "")
+        topics = domains.get("topics", [])
+        days_until = (edate - now).days
+
+        hist_key = (planet, sign)
+        historical = HISTORICAL_PATTERNS.get(hist_key, None)
+
+        ingress_predictions = [
+            f"When {planet} enters {sign}, the collective conversation shifts toward {sign_theme}",
+            f"Expect a wave of news stories around {mundane.lower()} filtered through {sign} themes",
+            f"Industries and institutions governed by {planet} ({mundane.lower()}) will feel a tonal shift",
+            f"What begins around {entry['date']} sets the tone for the entire {planet}-in-{sign} period",
+        ]
+
+        if historical:
+            ingress_predictions.append(
+                f"History echoes: the last time {planet} entered {sign} ({historical['last_transit']}), "
+                f"the world saw {historical['events'][0].lower()}"
+            )
+
+        pred_id += 1
+        predictions.append({
+            "id": f"ingress_{planet.lower()}_{sign.lower()}_{entry['date']}",
+            "type": "ingress",
+            "planet": planet,
+            "sign": sign,
+            "start_date": entry["date"],
+            "end_date": entry["date"],
+            "days_until": days_until,
+            "is_active": False,
+            "headline": f"{planet} Enters {sign}",
+            "date_range": entry["date"],
+            "domain": mundane,
+            "predictions": ingress_predictions,
+            "watch_for": topics[:5],
+            "historical": historical,
+        })
+
+    # Sort by date (active first, then soonest)
+    predictions.sort(key=lambda p: (0 if p["is_active"] else 1, p["days_until"]))
+
+    return predictions
+
+
+def _check_prediction_hits(predictions, cosmic_news_articles):
+    """
+    Layer 3: Check if any predictions have matching headlines.
+    Returns predictions with hit data attached.
+    """
+    if not cosmic_news_articles:
+        return predictions
+
+    for pred in predictions:
+        if not pred["is_active"]:
+            continue  # Only check active predictions
+
+        watch_keywords = pred.get("watch_for", [])
+        hits = []
+
+        for article in cosmic_news_articles:
+            text = (article.get("title", "") + " " + article.get("description", "")).lower()
+            matched_keywords = [kw for kw in watch_keywords if kw.lower() in text]
+            if len(matched_keywords) >= 1:
+                hits.append({
+                    "headline": article.get("title", ""),
+                    "source": article.get("source", ""),
+                    "matched_keywords": matched_keywords,
+                })
+
+        if hits:
+            pred["confirmed_hits"] = hits[:3]  # Top 3 matching headlines
+            pred["hit_count"] = len(hits)
+
+    return predictions
+
+
+# Cache for predictions
+_predictions_cache = {"data": None, "fetched_at": None}
+
+
+@app.get("/forecast/predictions")
+def get_predictions():
+    """
+    Predictive Cosmic Forecast — forward-looking predictions based on upcoming transits.
+    Layer 1: Specific dated predictions for each upcoming event
+    Layer 2: Historical pattern context (what happened last time)
+    Layer 3: Prediction tracking (matching predictions to current headlines)
+    """
+    try:
+        now = datetime.now(timezone.utc)
+
+        # Return cache if fresh (< 30 min)
+        if _predictions_cache["data"] and _predictions_cache["fetched_at"]:
+            age = (now - _predictions_cache["fetched_at"]).total_seconds()
+            if age < 1800:
+                return _predictions_cache["data"]
+
+        # Layer 1 + 2: Generate predictions with historical context
+        predictions = _generate_predictions(days_ahead=60)
+
+        # Layer 3: Check for prediction hits against current news
+        articles = _fetch_rss_articles(max_per_feed=10)
+        predictions = _check_prediction_hits(predictions, articles)
+
+        # Count stats
+        active_count = sum(1 for p in predictions if p["is_active"])
+        upcoming_count = sum(1 for p in predictions if not p["is_active"])
+        confirmed_count = sum(1 for p in predictions if p.get("confirmed_hits"))
+        total_hits = sum(p.get("hit_count", 0) for p in predictions)
+
+        result = {
+            "success": True,
+            "timestamp": now.isoformat(),
+            "predictions": predictions,
+            "stats": {
+                "active_predictions": active_count,
+                "upcoming_predictions": upcoming_count,
+                "confirmed_predictions": confirmed_count,
+                "total_headline_hits": total_hits,
+                "accuracy_note": "Predictions are based on traditional mundane astrology — the correlation between planetary cycles and world event themes.",
+            },
+        }
+
+        _predictions_cache["data"] = result
+        _predictions_cache["fetched_at"] = now
+        return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction engine failed: {str(e)}")
+
+
 # ─── Run ───────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
