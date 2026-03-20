@@ -9,6 +9,10 @@ Endpoints:
   POST /moon-forecast      — Get personalized moon forecast
   POST /mood               — Log mood data
   POST /cycles             — Get active planetary cycles
+  GET  /forecast/retrogrades  — Upcoming retrogrades (next 90 days)
+  GET  /forecast/eclipses     — Upcoming eclipses (next 12 months)
+  POST /forecast/aspects      — Major upcoming aspects (next 90 days)
+  POST /forecast/personal     — Personalized cosmic forecast
   GET  /health             — Health check
 """
 
@@ -932,6 +936,544 @@ def get_planetary_cycles(req: ChartRequest):
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Cycles calculation failed: {str(e)}")
+
+
+# ─── Forecast / Predictive Analytics Endpoints ─
+
+# Retrograde periods for 2025-2027 (pre-computed from ephemeris data)
+# Format: (planet, start_date, end_date, sign_at_start, sign_at_end)
+RETROGRADE_DATA = [
+    # 2025
+    ("Mercury", "2025-03-14", "2025-04-07", "Aries", "Pisces"),
+    ("Mercury", "2025-07-17", "2025-08-11", "Leo", "Leo"),
+    ("Mercury", "2025-11-09", "2025-11-29", "Sagittarius", "Scorpio"),
+    ("Venus", "2025-03-01", "2025-04-12", "Aries", "Pisces"),
+    ("Mars", "2025-01-06", "2025-02-23", "Cancer", "Cancer"),
+    ("Jupiter", "2025-11-11", "2026-03-10", "Cancer", "Cancer"),
+    ("Saturn", "2025-07-13", "2025-11-27", "Aries", "Pisces"),
+    ("Uranus", "2025-09-06", "2026-02-04", "Gemini", "Taurus"),
+    ("Neptune", "2025-07-04", "2025-12-10", "Aries", "Pisces"),
+    ("Pluto", "2025-05-04", "2025-10-13", "Aquarius", "Aquarius"),
+    # 2026
+    ("Mercury", "2026-02-25", "2026-03-20", "Pisces", "Pisces"),
+    ("Mercury", "2026-06-29", "2026-07-23", "Cancer", "Cancer"),
+    ("Mercury", "2026-10-24", "2026-11-13", "Scorpio", "Scorpio"),
+    ("Venus", "2026-10-02", "2026-11-13", "Scorpio", "Libra"),
+    ("Mars", "2027-01-10", "2027-04-01", "Leo", "Leo"),
+    ("Jupiter", "2025-11-11", "2026-03-10", "Cancer", "Cancer"),
+    ("Saturn", "2026-08-01", "2026-12-10", "Taurus", "Aries"),
+    ("Uranus", "2026-09-17", "2027-02-12", "Gemini", "Gemini"),
+    ("Neptune", "2026-07-09", "2026-12-14", "Aries", "Aries"),
+    ("Pluto", "2026-05-09", "2026-10-17", "Aquarius", "Aquarius"),
+    # 2027
+    ("Mercury", "2027-02-09", "2027-03-03", "Aquarius", "Aquarius"),
+    ("Mercury", "2027-06-10", "2027-07-04", "Cancer", "Gemini"),
+    ("Mercury", "2027-10-07", "2027-10-28", "Scorpio", "Libra"),
+    ("Venus", "2027-05-09", "2027-06-20", "Gemini", "Taurus"),
+]
+
+# Eclipse data 2025-2027 (pre-computed)
+ECLIPSE_DATA = [
+    # 2025
+    {"date": "2025-03-29", "type": "solar_total", "sign": "Aries", "degree": 8.96, "saros": 149,
+     "theme": "Bold new beginnings — identity, self-assertion, courage to start fresh"},
+    {"date": "2025-03-14", "type": "lunar_total", "sign": "Virgo", "degree": 23.95, "saros": 132,
+     "theme": "Release perfectionism — health routines, daily habits, service work"},
+    {"date": "2025-09-07", "type": "lunar_total", "sign": "Pisces", "degree": 15.23, "saros": 137,
+     "theme": "Spiritual surrender — dissolving illusions, creative transcendence"},
+    {"date": "2025-09-21", "type": "solar_partial", "sign": "Virgo", "degree": 29.08, "saros": 154,
+     "theme": "Refine your craft — analytical clarity, discernment, health breakthroughs"},
+    # 2026
+    {"date": "2026-02-17", "type": "solar_annular", "sign": "Aquarius", "degree": 28.77, "saros": 121,
+     "theme": "Community revolution — innovation, collective vision, humanitarian ideals"},
+    {"date": "2026-03-03", "type": "lunar_total", "sign": "Virgo", "degree": 12.34, "saros": 142,
+     "theme": "Purify and heal — release what no longer serves your wellbeing"},
+    {"date": "2026-08-12", "type": "solar_total", "sign": "Leo", "degree": 19.88, "saros": 126,
+     "theme": "Creative rebirth — self-expression, romance, inner child healing"},
+    {"date": "2026-08-28", "type": "lunar_total", "sign": "Pisces", "degree": 4.67, "saros": 147,
+     "theme": "Dream dissolution — releasing fantasies to embrace deeper truth"},
+    # 2027
+    {"date": "2027-02-06", "type": "solar_annular", "sign": "Aquarius", "degree": 17.45, "saros": 131,
+     "theme": "Future visioning — technology, freedom, breaking from tradition"},
+    {"date": "2027-02-20", "type": "lunar_penumbral", "sign": "Virgo", "degree": 1.89, "saros": 152,
+     "theme": "Subtle shifts in routine — small refinements with big impact"},
+    {"date": "2027-07-18", "type": "lunar_penumbral", "sign": "Capricorn", "degree": 25.34, "saros": 119,
+     "theme": "Career recalibration — restructuring ambitions and public role"},
+    {"date": "2027-08-02", "type": "solar_total", "sign": "Leo", "degree": 9.72, "saros": 136,
+     "theme": "Heart awakening — courage, joy, authentic self-expression"},
+]
+
+# Interpretations for retrograde planets
+RETROGRADE_THEMES = {
+    "Mercury": {
+        "domain": "Communication & Technology",
+        "energy": "Review, revisit, and refine how you think and communicate",
+        "do": "Back up data, revisit old ideas, reconnect with people, edit and revise",
+        "avoid": "Signing major contracts, launching new tech, making big purchases of electronics",
+    },
+    "Venus": {
+        "domain": "Love & Values",
+        "energy": "Reassess relationships, finances, and what you truly value",
+        "do": "Reflect on relationship patterns, revisit your budget, reconnect with old friends",
+        "avoid": "Starting new relationships, drastic appearance changes, major financial commitments",
+    },
+    "Mars": {
+        "domain": "Action & Drive",
+        "energy": "Internalize your energy — strategy over force",
+        "do": "Review your goals, refine your approach, rest and recharge physical energy",
+        "avoid": "Starting new competitive ventures, confrontations, risky physical activities",
+    },
+    "Jupiter": {
+        "domain": "Growth & Expansion",
+        "energy": "Inner growth over outer expansion — deepen your philosophy",
+        "do": "Revisit your beliefs, study, plan future growth, reassess what abundance means",
+        "avoid": "Overcommitting, taking on too much, excessive spending on growth",
+    },
+    "Saturn": {
+        "domain": "Structure & Discipline",
+        "energy": "Review your foundations — are your structures serving you?",
+        "do": "Reassess commitments, revisit long-term plans, address neglected responsibilities",
+        "avoid": "Making binding long-term commitments, ignoring structural issues",
+    },
+    "Uranus": {
+        "domain": "Innovation & Liberation",
+        "energy": "Internal revolution — process recent changes before making more",
+        "do": "Integrate recent breakthroughs, reflect on where you need freedom, innovate quietly",
+        "avoid": "Impulsive radical changes, forcing innovation, rebelling without purpose",
+    },
+    "Neptune": {
+        "domain": "Dreams & Spirituality",
+        "energy": "The veil thins — see clearly what was previously obscured",
+        "do": "Practice discernment, revisit creative visions, deepen spiritual practices",
+        "avoid": "Escapism, idealization of people or situations, ignoring red flags",
+    },
+    "Pluto": {
+        "domain": "Transformation & Power",
+        "energy": "Deep internal transformation — process and integrate shadow work",
+        "do": "Journaling, therapy, releasing control, allowing transformation",
+        "avoid": "Power struggles, forcing transformation on others, resisting necessary endings",
+    },
+}
+
+# Interpretations for major aspects between outer planets
+ASPECT_THEMES = {
+    ("Jupiter", "Saturn", "conjunction"): "Societal reset — new 20-year cycle of building and growth begins",
+    ("Jupiter", "Saturn", "square"): "Growing pains — tension between expansion and restriction challenges you to find balance",
+    ("Jupiter", "Saturn", "opposition"): "Harvest or reckoning — the structures you built are tested and matured",
+    ("Jupiter", "Uranus", "conjunction"): "Breakthrough expansion — sudden opportunities, tech innovation, freedom breakthroughs",
+    ("Jupiter", "Uranus", "square"): "Restless growth — desire for freedom clashes with expanding commitments",
+    ("Jupiter", "Uranus", "opposition"): "Liberation through growth — balancing security with the call to break free",
+    ("Jupiter", "Neptune", "conjunction"): "Spiritual expansion — heightened faith, creativity, and compassion flood in",
+    ("Jupiter", "Neptune", "square"): "Idealism vs reality — beautiful visions may not have solid foundations yet",
+    ("Jupiter", "Neptune", "opposition"): "Faith tested — discernment needed between genuine inspiration and illusion",
+    ("Jupiter", "Pluto", "conjunction"): "Power amplified — intense ambition, transformation through growth",
+    ("Jupiter", "Pluto", "square"): "Power struggle expansion — be mindful of manipulation or obsessive growth",
+    ("Jupiter", "Pluto", "opposition"): "Power dynamics peak — confront where external forces control your growth",
+    ("Saturn", "Uranus", "conjunction"): "New order — innovative structures emerge from the old",
+    ("Saturn", "Uranus", "square"): "Old vs new — tension between tradition and revolution demands creative solutions",
+    ("Saturn", "Uranus", "opposition"): "Breaking point — outdated structures must evolve or collapse",
+    ("Saturn", "Neptune", "conjunction"): "Dreams meet reality — spiritual ideals take concrete form",
+    ("Saturn", "Neptune", "square"): "Disillusionment or crystallization — face where dreams need grounding",
+    ("Saturn", "Neptune", "opposition"): "Reality check — dissolving structures reveal what was always an illusion",
+    ("Saturn", "Pluto", "conjunction"): "Total restructuring — power meets discipline, societies transform",
+    ("Saturn", "Pluto", "square"): "Pressure builds — existing power structures face intense testing",
+    ("Saturn", "Pluto", "opposition"): "Breakdown/breakthrough — massive pressure forces transformation of foundations",
+    ("Uranus", "Neptune", "conjunction"): "Consciousness shift — generational spiritual and technological awakening",
+    ("Uranus", "Neptune", "square"): "Restless idealism — the urge to revolutionize meets spiritual confusion",
+    ("Uranus", "Pluto", "conjunction"): "Revolutionary transformation — societal upheaval and rebirth",
+    ("Uranus", "Pluto", "square"): "Radical change — deep societal tensions demand transformation and liberation",
+    ("Neptune", "Pluto", "conjunction"): "Civilizational shift — occurs ~every 492 years, profound collective transformation",
+    ("Neptune", "Pluto", "sextile"): "Generational flow — subtle spiritual evolution supports deep transformation",
+}
+
+
+def get_sign_for_degree(abs_degree):
+    """Convert absolute degree to zodiac sign."""
+    signs = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo",
+             "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"]
+    idx = int(abs_degree // 30) % 12
+    return signs[idx]
+
+
+@app.get("/forecast/retrogrades")
+def get_upcoming_retrogrades():
+    """
+    Get upcoming retrograde periods for the next 90 days.
+    Returns currently active retrogrades and upcoming ones.
+    """
+    try:
+        now = datetime.now(timezone.utc).date()
+        window_end = now + timedelta(days=90)
+
+        active = []
+        upcoming = []
+
+        for planet, start_str, end_str, sign_start, sign_end in RETROGRADE_DATA:
+            start = datetime.strptime(start_str, "%Y-%m-%d").date()
+            end = datetime.strptime(end_str, "%Y-%m-%d").date()
+
+            # Skip if entirely in the past
+            if end < now:
+                continue
+
+            # Skip if too far in the future
+            if start > window_end:
+                continue
+
+            theme = RETROGRADE_THEMES.get(planet, {})
+            entry = {
+                "planet": planet,
+                "start_date": start_str,
+                "end_date": end_str,
+                "sign_start": sign_start,
+                "sign_end": sign_end,
+                "days_total": (end - start).days,
+                "domain": theme.get("domain", ""),
+                "energy": theme.get("energy", ""),
+                "do": theme.get("do", ""),
+                "avoid": theme.get("avoid", ""),
+            }
+
+            if start <= now <= end:
+                entry["status"] = "active"
+                entry["days_remaining"] = (end - now).days
+                entry["progress_pct"] = round(((now - start).days / max((end - start).days, 1)) * 100)
+                active.append(entry)
+            elif start > now:
+                entry["status"] = "upcoming"
+                entry["days_until"] = (start - now).days
+                upcoming.append(entry)
+
+        # Sort upcoming by start date
+        upcoming.sort(key=lambda x: x["start_date"])
+
+        return {
+            "success": True,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "active_retrogrades": active,
+            "upcoming_retrogrades": upcoming,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Retrograde forecast failed: {str(e)}")
+
+
+@app.get("/forecast/eclipses")
+def get_upcoming_eclipses():
+    """
+    Get upcoming eclipses for the next 12 months.
+    Returns eclipse date, type, sign, degree, and thematic interpretation.
+    """
+    try:
+        now = datetime.now(timezone.utc).date()
+        window_end = now + timedelta(days=365)
+
+        eclipses = []
+        for eclipse in ECLIPSE_DATA:
+            edate = datetime.strptime(eclipse["date"], "%Y-%m-%d").date()
+            if edate < now:
+                continue
+            if edate > window_end:
+                continue
+
+            degree_info = format_degrees(eclipse["degree"])
+            eclipses.append({
+                "date": eclipse["date"],
+                "type": eclipse["type"],
+                "type_display": eclipse["type"].replace("_", " ").title(),
+                "sign": eclipse["sign"],
+                "degree": degree_info["degree_formatted"],
+                "theme": eclipse["theme"],
+                "days_until": (edate - now).days,
+            })
+
+        # Sort by date
+        eclipses.sort(key=lambda x: x["date"])
+
+        return {
+            "success": True,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "eclipses": eclipses,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Eclipse forecast failed: {str(e)}")
+
+
+@app.post("/forecast/aspects")
+def get_upcoming_aspects():
+    """
+    Get major aspects forming between outer planets in the next 90 days.
+    These are the collective/generational transits that affect everyone.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        outer_planets = ["jupiter", "saturn", "uranus", "neptune", "pluto"]
+        aspect_checks = [
+            (0, "conjunction"), (60, "sextile"), (90, "square"),
+            (120, "trine"), (180, "opposition"),
+        ]
+
+        # Get current positions
+        transits = AstrologicalSubject(
+            "Transit", now.year, now.month, now.day, now.hour, now.minute,
+            "Greenwich", "GB", zodiac_type="Tropic",
+        )
+
+        aspects_found = []
+
+        for i, p1_name in enumerate(outer_planets):
+            for p2_name in outer_planets[i+1:]:
+                p1 = getattr(transits, p1_name, None)
+                p2 = getattr(transits, p2_name, None)
+                if not p1 or not p2:
+                    continue
+
+                p1_abs = getattr(p1, 'abs_pos', 0)
+                p2_abs = getattr(p2, 'abs_pos', 0)
+                p1_sign = SIGN_MAP.get(getattr(p1, 'sign', ''), '')
+                p2_sign = SIGN_MAP.get(getattr(p2, 'sign', ''), '')
+
+                for angle, aspect_name in aspect_checks:
+                    orb, applying = calculate_aspect_orb(p1_abs, p2_abs, angle)
+
+                    # Only show aspects within 8 degrees
+                    if orb <= 8.0:
+                        theme_key = (p1.name, p2.name, aspect_name)
+                        theme = ASPECT_THEMES.get(theme_key, f"{p1.name} {aspect_name} {p2.name}")
+
+                        # Estimate when exact
+                        if applying and orb > 0.5:
+                            # Rough estimate based on combined motion
+                            daily_motion_diff = abs(
+                                PLANET_DAILY_MOTION.get(p1.name, 0.01) -
+                                PLANET_DAILY_MOTION.get(p2.name, 0.01)
+                            )
+                            if daily_motion_diff > 0:
+                                days_to_exact = orb / daily_motion_diff
+                                exact_date = (now + timedelta(days=days_to_exact)).date().isoformat()
+                            else:
+                                exact_date = None
+                        else:
+                            exact_date = None
+
+                        aspects_found.append({
+                            "planet1": p1.name,
+                            "planet1_sign": p1_sign,
+                            "planet2": p2.name,
+                            "planet2_sign": p2_sign,
+                            "aspect": aspect_name,
+                            "orb": round(orb, 2),
+                            "applying": applying,
+                            "exact_date_estimate": exact_date,
+                            "theme": theme,
+                            "intensity": "exact" if orb <= 1 else ("strong" if orb <= 3 else "building"),
+                        })
+
+        # Sort by orb (tightest first)
+        aspects_found.sort(key=lambda x: x["orb"])
+
+        return {
+            "success": True,
+            "timestamp": now.isoformat(),
+            "major_aspects": aspects_found,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Aspect forecast failed: {str(e)}")
+
+
+@app.post("/forecast/personal")
+def get_personal_forecast(req: ChartRequest):
+    """
+    Generate a personalized cosmic forecast blending the user's natal chart
+    with upcoming transits, retrogrades, and eclipses.
+
+    This is the premium endpoint — gives users tailored predictions.
+    """
+    try:
+        # Calculate natal chart
+        natal = AstrologicalSubject(
+            req.name, req.year, req.month, req.day, req.hour, req.minute,
+            req.city, req.country, zodiac_type="Tropic",
+        )
+
+        now = datetime.now(timezone.utc)
+        today = now.date()
+
+        # Get current transits
+        transits = AstrologicalSubject(
+            "Transit", now.year, now.month, now.day, now.hour, now.minute,
+            "Greenwich", "GB", zodiac_type="Tropic",
+        )
+
+        natal_houses = get_all_house_cusps(natal)
+        signs_ordered = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo",
+                         "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"]
+
+        # ── 1. Retrograde impact analysis ──
+        retrograde_impacts = []
+        for planet, start_str, end_str, sign_start, sign_end in RETROGRADE_DATA:
+            start = datetime.strptime(start_str, "%Y-%m-%d").date()
+            end = datetime.strptime(end_str, "%Y-%m-%d").date()
+
+            if end < today or start > today + timedelta(days=90):
+                continue
+
+            is_active = start <= today <= end
+
+            # Find which natal house this retrograde activates
+            transit_planet = getattr(transits, planet.lower(), None)
+            if transit_planet:
+                t_abs = getattr(transit_planet, 'abs_pos', 0)
+                affected_house = get_planet_house(t_abs, natal_houses)
+            else:
+                affected_house = None
+
+            # Check if retrograde planet aspects any natal planets
+            natal_aspects = []
+            if transit_planet:
+                t_abs = getattr(transit_planet, 'abs_pos', 0)
+                for pname in ["sun", "moon", "mercury", "venus", "mars", "jupiter", "saturn"]:
+                    np = getattr(natal, pname, None)
+                    if np:
+                        n_abs = getattr(np, 'abs_pos', 0)
+                        aspects = get_major_aspects(t_abs, n_abs, planet, np.name)
+                        for a in aspects:
+                            if a["orb"] <= 5:
+                                natal_aspects.append({
+                                    "natal_planet": np.name,
+                                    "aspect": a["aspect_type"],
+                                    "orb": a["orb"],
+                                })
+
+            theme = RETROGRADE_THEMES.get(planet, {})
+            retrograde_impacts.append({
+                "planet": planet,
+                "status": "active" if is_active else "upcoming",
+                "start_date": start_str,
+                "end_date": end_str,
+                "affected_house": affected_house,
+                "natal_aspects": natal_aspects,
+                "domain": theme.get("domain", ""),
+                "personal_impact": f"Activating your {_ordinal(affected_house)} house" if affected_house else "General influence",
+                "intensity": "high" if natal_aspects else "moderate",
+            })
+
+        # ── 2. Eclipse impact analysis ──
+        eclipse_impacts = []
+        for eclipse in ECLIPSE_DATA:
+            edate = datetime.strptime(eclipse["date"], "%Y-%m-%d").date()
+            if edate < today or edate > today + timedelta(days=365):
+                continue
+
+            eclipse_abs = eclipse["degree"] + signs_ordered.index(eclipse["sign"]) * 30 if eclipse["sign"] in signs_ordered else eclipse["degree"]
+
+            # Which natal house does this eclipse hit?
+            affected_house = get_planet_house(eclipse_abs, natal_houses)
+
+            # Does it conjunct/oppose any natal planets?
+            natal_hits = []
+            for pname in ["sun", "moon", "mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune", "pluto"]:
+                np = getattr(natal, pname, None)
+                if np:
+                    n_abs = getattr(np, 'abs_pos', 0)
+                    orb = abs(eclipse_abs - n_abs)
+                    if orb > 180:
+                        orb = 360 - orb
+                    if orb <= 5:
+                        natal_hits.append({"planet": np.name, "orb": round(orb, 1), "type": "conjunction"})
+                    elif abs(orb - 180) <= 5:
+                        natal_hits.append({"planet": np.name, "orb": round(abs(orb - 180), 1), "type": "opposition"})
+
+            eclipse_impacts.append({
+                "date": eclipse["date"],
+                "type": eclipse["type"].replace("_", " ").title(),
+                "sign": eclipse["sign"],
+                "degree": format_degrees(eclipse["degree"])["degree_formatted"],
+                "theme": eclipse["theme"],
+                "affected_house": affected_house,
+                "natal_hits": natal_hits,
+                "personal_significance": "high" if natal_hits else ("moderate" if affected_house else "low"),
+                "days_until": (edate - today).days,
+            })
+
+        # ── 3. Key transit windows (next 30 days) ──
+        transit_windows = []
+        outer_transits = ["jupiter", "saturn", "uranus", "neptune", "pluto"]
+        for t_name in outer_transits:
+            tp = getattr(transits, t_name, None)
+            if not tp:
+                continue
+            t_abs = getattr(tp, 'abs_pos', 0)
+            t_sign = SIGN_MAP.get(getattr(tp, 'sign', ''), '')
+            t_house = get_planet_house(t_abs, natal_houses)
+
+            # Check aspects to natal planets
+            key_aspects = []
+            for n_name in ["sun", "moon", "mercury", "venus", "mars", "jupiter", "saturn"]:
+                np = getattr(natal, n_name, None)
+                if not np:
+                    continue
+                n_abs = getattr(np, 'abs_pos', 0)
+                aspects = get_major_aspects(t_abs, n_abs, tp.name, np.name)
+                for a in aspects:
+                    if a["orb"] <= 5:
+                        key_aspects.append({
+                            "natal_planet": np.name,
+                            "aspect": a["aspect_type"],
+                            "orb": a["orb"],
+                            "applying": a["applying"],
+                        })
+
+            if key_aspects or t_house:
+                transit_windows.append({
+                    "transit_planet": tp.name,
+                    "transit_sign": t_sign,
+                    "natal_house": t_house,
+                    "retrograde": getattr(tp, 'retrograde', False),
+                    "key_aspects": key_aspects,
+                })
+
+        # ── 4. This week's cosmic weather summary ──
+        sun_sign = SIGN_MAP.get(getattr(transits.sun, 'sign', ''), '') if transits.sun else ''
+        moon_sign = SIGN_MAP.get(getattr(transits.moon, 'sign', ''), '') if transits.moon else ''
+        moon_abs = getattr(transits.moon, 'abs_pos', 0) if transits.moon else 0
+        sun_abs = getattr(transits.sun, 'abs_pos', 0) if transits.sun else 0
+        moon_phase = calculate_moon_phase(sun_abs, moon_abs)
+        moon_house = get_planet_house(moon_abs, natal_houses)
+
+        weekly_summary = {
+            "sun_sign": sun_sign,
+            "moon_sign": moon_sign,
+            "moon_phase": moon_phase,
+            "moon_in_house": moon_house,
+            "active_retrogrades_count": sum(1 for r in retrograde_impacts if r["status"] == "active"),
+        }
+
+        return {
+            "success": True,
+            "birth_data": {
+                "name": req.name,
+                "date": f"{req.year}-{req.month:02d}-{req.day:02d}",
+            },
+            "weekly_summary": weekly_summary,
+            "retrograde_impacts": retrograde_impacts,
+            "eclipse_impacts": eclipse_impacts,
+            "transit_windows": transit_windows,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Personal forecast failed: {str(e)}")
+
+
+def _ordinal(n):
+    """Convert number to ordinal string (1st, 2nd, 3rd, etc.)"""
+    if n is None:
+        return ""
+    n = int(n)
+    suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10 if n % 10 in {1, 2, 3} and n not in {11, 12, 13} else 0, "th")
+    return f"{n}{suffix}"
 
 
 # ─── Run ───────────────────────────────────────
