@@ -409,19 +409,35 @@ def calculate_moon_phase(sun_degree, moon_degree):
     return MOON_PHASES[phase_index]
 
 
-def estimate_next_conjunction_date(natal_position, transit_position, planet_name):
-    """Estimate when transit planet will be conjunct natal position.
+def estimate_next_aspect_date(natal_position, transit_position, planet_name, aspect_angle=0):
+    """Estimate when transit planet will reach the exact aspect to natal position.
 
     Args:
         natal_position: Natal planet absolute degree
         transit_position: Current transit planet absolute degree
         planet_name: Name of transit planet
+        aspect_angle: Target aspect angle (0=conjunction, 90=square, 180=opposition)
 
     Returns:
         ISO format date string
     """
-    # Calculate angular distance remaining for next conjunction
-    distance = (natal_position - transit_position) % 360
+    # Target degree = natal position + aspect angle (where transit needs to be)
+    target_degree = (natal_position + aspect_angle) % 360
+
+    # Calculate angular distance remaining to reach target
+    distance = (target_degree - transit_position) % 360
+
+    # If very close (< 5 degrees ahead), the aspect may have just passed
+    # Check if the shorter path is backwards (already passed)
+    if distance > 350:
+        distance = 360 - distance  # It just passed, estimate when it last was exact
+        # Return a recent past date or just show "recent"
+        daily_motion = PLANET_DAILY_MOTION.get(planet_name, 0.5)
+        if daily_motion == 0:
+            daily_motion = 0.5
+        days_ago = distance / daily_motion
+        past_date = datetime.now(timezone.utc) - timedelta(days=days_ago)
+        return past_date.date().isoformat()
 
     # Get daily motion
     daily_motion = PLANET_DAILY_MOTION.get(planet_name, 0.5)
@@ -430,6 +446,11 @@ def estimate_next_conjunction_date(natal_position, transit_position, planet_name
 
     # Calculate days until exact
     days_remaining = distance / daily_motion
+
+    # Cap at reasonable maximum (don't show dates centuries away)
+    max_days = 365 * 30  # 30 years max
+    if days_remaining > max_days:
+        return None
 
     # Get future date
     future_date = datetime.now(timezone.utc) + timedelta(days=days_remaining)
@@ -823,20 +844,22 @@ def get_planetary_cycles(req: ChartRequest):
         )
 
         cycles_to_check = [
-            # (natal_planet_name, transit_planet_name, aspect_type, orb, description)
-            ("saturn", "saturn", "conjunction", 2.0, "A major life restructuring cycle occurring approximately every 29.5 years."),
-            ("jupiter", "jupiter", "conjunction", 1.5, "A growth and expansion cycle occurring approximately every 12 years."),
-            ("saturn", "saturn", "square", 2.0, "A challenging learning phase occurring approximately every 7.4 years."),
-            ("saturn", "saturn", "opposition", 2.0, "A peak manifestation of Saturn's lessons, occurring around age 14-15."),
-            ("chiron", "chiron", "conjunction", 2.0, "A profound healing and integration cycle occurring approximately every 50 years."),
-            ("uranus", "uranus", "opposition", 2.0, "A period of radical change and liberation occurring around age 42."),
-            ("neptune", "neptune", "square", 2.0, "A dissolution and spiritual awakening phase occurring around age 41."),
-            ("pluto", "pluto", "square", 3.0, "A period of deep transformation occurring approximately every 60-80 years."),
+            # (natal_planet_name, transit_planet_name, aspect_type, orb_active, orb_approaching, description)
+            # Inner/social planets: tighter orbs
+            ("saturn", "saturn", "conjunction", 3.0, 8.0, "A major life restructuring cycle occurring approximately every 29.5 years."),
+            ("jupiter", "jupiter", "conjunction", 3.0, 8.0, "A growth and expansion cycle occurring approximately every 12 years."),
+            ("saturn", "saturn", "square", 3.0, 7.0, "A challenging learning phase occurring approximately every 7.4 years."),
+            ("saturn", "saturn", "opposition", 3.0, 7.0, "A culmination of Saturn's lessons, occurring approximately every 14-15 years."),
+            ("chiron", "chiron", "conjunction", 5.0, 10.0, "A profound healing and integration cycle occurring approximately every 50 years."),
+            # Outer planets: much wider orbs (they move extremely slowly, cycles are felt for years)
+            ("uranus", "uranus", "opposition", 8.0, 15.0, "A period of radical change and liberation occurring around age 38-44."),
+            ("neptune", "neptune", "square", 8.0, 15.0, "A dissolution and spiritual awakening phase occurring around age 40-42."),
+            ("pluto", "pluto", "square", 8.0, 15.0, "A period of deep transformation — timing varies by generation (age 36-60+)."),
         ]
 
         cycles = []
 
-        for natal_pname, transit_pname, aspect_type, orb_limit, description in cycles_to_check:
+        for natal_pname, transit_pname, aspect_type, orb_active, orb_approaching, description in cycles_to_check:
             try:
                 natal_planet = getattr(natal, natal_pname, None)
                 transit_planet = getattr(transits, transit_pname, None)
@@ -862,19 +885,24 @@ def get_planetary_cycles(req: ChartRequest):
                 # Calculate orb
                 orb, applying = calculate_aspect_orb(transit_degree, natal_degree, aspect_angle)
 
-                # Determine status
-                if orb <= orb_limit:
+                # Determine status using proper thresholds
+                if orb <= orb_active:
                     status = "active"
-                elif orb <= orb_limit + 5:  # Approaching within 5 degrees beyond orb
+                elif orb <= orb_approaching:
                     status = "approaching"
                 else:
                     status = "distant"
 
-                # Estimate next exact date
-                estimated_date = estimate_next_conjunction_date(natal_degree, transit_degree, transit_planet.name)
+                # Estimate next exact date (pass aspect_angle for correct calculation)
+                estimated_date = estimate_next_aspect_date(natal_degree, transit_degree, transit_planet.name, aspect_angle)
 
                 # Format degree
                 degree_info = format_degrees(natal_pos)
+
+                # Format transit degree too
+                transit_sign = SIGN_MAP.get(getattr(transit_planet, 'sign', ''), '')
+                transit_pos = getattr(transit_planet, 'position', 0)
+                transit_degree_info = format_degrees(transit_pos)
 
                 cycles.append({
                     "name": f"{transit_planet.name} {aspect_type.title()}",
@@ -882,8 +910,9 @@ def get_planetary_cycles(req: ChartRequest):
                     "transit_planet": transit_planet.name,
                     "natal_planet": natal_planet.name,
                     "natal_degree": f"{degree_info['degree_formatted']} {natal_sign}",
-                    "transit_degree": f"{degree_info['degree_formatted']} {natal_sign}",
-                    "orb": orb,
+                    "transit_degree": f"{transit_degree_info['degree_formatted']} {transit_sign}",
+                    "orb": round(orb, 1),
+                    "applying": applying,
                     "status": status,
                     "estimated_exact_date": estimated_date,
                     "description": description,
