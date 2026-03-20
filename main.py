@@ -2559,7 +2559,7 @@ def _build_chart_context(req: FairyAskRequest) -> str:
                 aspects = get_major_aspects(t_abs, n_abs, tp.name, np_obj.name)
                 for a in aspects:
                     if a["orb"] <= 4:
-                        aspect_lines.append(f"  Transit {a['transit_planet']} {a['aspect_type']} Natal {a['natal_planet']} (orb: {a['orb']}°)")
+                        aspect_lines.append(f"  Transit {tp.name} {a['aspect_type']} Natal {np_obj.name} (orb: {a['orb']}°)")
 
         # Moon phase
         sun_abs = getattr(transits.sun, 'abs_pos', 0) if hasattr(transits, 'sun') else 0
@@ -2658,17 +2658,6 @@ def _call_anthropic(system: str, messages: list) -> str:
     except Exception as e:
         logging.error(f"Fairy agent error: {type(e).__name__}: {str(e)[:500]}")
         return "Something flickered in the fairy dust... give it another try 🧚‍♀️"
-
-
-@app.post("/fairy/chart-debug")
-def fairy_chart_debug(req: FairyAskRequest):
-    """Temporary debug — returns raw chart context."""
-    try:
-        ctx = _build_chart_context(req)
-        return {"context": ctx[:2000], "length": len(ctx)}
-    except Exception as e:
-        import traceback
-        return {"error": str(e), "traceback": traceback.format_exc()}
 
 
 @app.post("/fairy/ask")
