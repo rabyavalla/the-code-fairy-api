@@ -2604,6 +2604,9 @@ ACTIVE RETROGRADES:
         return context
 
     except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        logging.error(f"Chart context build failed: {tb}")
         return f"Chart calculation error: {str(e)}. Birth data may be incomplete."
 
 
@@ -2655,6 +2658,17 @@ def _call_anthropic(system: str, messages: list) -> str:
     except Exception as e:
         logging.error(f"Fairy agent error: {type(e).__name__}: {str(e)[:500]}")
         return "Something flickered in the fairy dust... give it another try 🧚‍♀️"
+
+
+@app.post("/fairy/chart-debug")
+def fairy_chart_debug(req: FairyAskRequest):
+    """Temporary debug — returns raw chart context."""
+    try:
+        ctx = _build_chart_context(req)
+        return {"context": ctx[:2000], "length": len(ctx)}
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
 
 
 @app.post("/fairy/ask")
