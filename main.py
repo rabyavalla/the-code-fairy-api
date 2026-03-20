@@ -2610,6 +2610,22 @@ ACTIVE RETROGRADES:
         return f"Chart calculation error: {str(e)}. Birth data may be incomplete."
 
 
+@app.get("/fairy/test-chart")
+def fairy_test_chart():
+    """Temporary debug: test chart context building."""
+    try:
+        from pydantic import BaseModel as _BM
+        req = FairyAskRequest(
+            question="test", name="TestUser", year=1995, month=6, day=15,
+            hour=14, minute=30, city="New York", country="US"
+        )
+        ctx = _build_chart_context(req)
+        return {"success": True, "context_length": len(ctx), "first_500": ctx[:500], "has_error": "error" in ctx.lower()}
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()[:1000]}
+
+
 def _call_anthropic(system: str, messages: list) -> str:
     """Call Anthropic Messages API directly via urllib."""
     if not ANTHROPIC_API_KEY:
