@@ -95,8 +95,8 @@ class ChartRequest(BaseModel):
     minute: int = Field(0, ge=0, le=59)
     city: str = "New York"
     country: str = "US"
-    lat: Optional[float] = None
-    lng: Optional[float] = None
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lng: Optional[float] = Field(None, ge=-180, le=180)
 
 
 class MoodEntry(BaseModel):
@@ -2485,8 +2485,8 @@ class FairyAskRequest(BaseModel):
     minute: Optional[int] = None
     city: Optional[str] = None
     country: Optional[str] = None
-    lat: Optional[float] = None
-    lng: Optional[float] = None
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lng: Optional[float] = Field(None, ge=-180, le=180)
     conversation: Optional[List[dict]] = None  # [{role: "user"/"assistant", content: "..."}]
 
 
@@ -2512,14 +2512,25 @@ def _build_chart_context(req: FairyAskRequest) -> str:
         # Build natal chart summary
         natal_chart = build_chart(natal)
         planets_text = []
-        for p in natal_chart.get("planets", []):
-            house_info = f" in House {p['house']}" if p.get("house") else ""
-            retro = " (retrograde)" if p.get("retrograde") else ""
-            planets_text.append(f"  {p['name']}: {p['sign']} {p.get('degree_formatted', '')}{house_info}{retro}")
+        planet_keys = ['sun', 'moon', 'mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'pluto', 'north_node', 'chiron', 'ascendant', 'midheaven']
+        for key in planet_keys:
+            p = natal_chart.get(key)
+            if p and isinstance(p, dict):
+                name = p.get('name', key.title())
+                sign = p.get('sign', '?')
+                deg = p.get('degree_formatted', '')
+                house = p.get('house', '')
+                retro = ' (retrograde)' if p.get('retrograde') else ''
+                house_info = f" in House {house}" if house else ""
+                planets_text.append(f"  {name}: {sign} {deg}{house_info}{retro}")
 
         houses_text = []
-        for h in natal_chart.get("houses", []):
-            houses_text.append(f"  {h['name']}: {h['sign']} {h.get('degree_formatted', '')}")
+        house_key = '_house_cusps'
+        house_cusps_data = natal_chart.get(house_key, [])
+        if isinstance(house_cusps_data, dict):
+            for house_num in sorted(house_cusps_data.keys()):
+                if isinstance(house_num, int):
+                    houses_text.append(f"  House {house_num}: {house_cusps_data[house_num]}°")
 
         # Current transits
         transit_planets = []
@@ -2602,8 +2613,6 @@ def _call_anthropic(system: str, messages: list) -> str:
         logging.error("ANTHROPIC_API_KEY is not set")
         return "The Code Fairy is still getting her wings set up ✨ The API key hasn't been configured yet. Check back soon!"
 
-    logging.error(f"[Fairy] Calling Anthropic API with key starting: {ANTHROPIC_API_KEY[:12]}...")
-
     payload = json.dumps({
         "model": "claude-sonnet-4-20250514",
         "max_tokens": 1024,
@@ -2628,7 +2637,7 @@ def _call_anthropic(system: str, messages: list) -> str:
             # Extract text from content blocks
             text_parts = []
             for block in data.get("content", []):
-                if block.get("type") == "text":
+                if block.get("type") == "text" and "text" in block:
                     text_parts.append(block["text"])
             return "\n".join(text_parts) if text_parts else "The stars are quiet right now... try asking again 💫"
     except URLError as e:
@@ -2636,27 +2645,16 @@ def _call_anthropic(system: str, messages: list) -> str:
         error_body = ""
         if hasattr(e, 'read'):
             try:
-                error_body = e.read().decode("utf-8")
+                error_body = e.read(1024).decode("utf-8", errors="ignore")
             except Exception:
                 pass
         elif hasattr(e, 'reason'):
             error_body = str(e.reason)
-        logging.error(f"Anthropic API URLError: {e} | Body: {error_body}")
-        return f"The cosmic signal got a little scrambled ✨ (Debug: {error_body[:200] if error_body else str(e)})"
+        logging.error(f"Anthropic API URLError: {e} | Body: {error_body[:500] if error_body else str(e)}")
+        return "The cosmic signal got a little scrambled ✨ Try asking me again in a moment."
     except Exception as e:
-        logging.error(f"Fairy agent error: {type(e).__name__}: {e}")
-        return f"Something flickered in the fairy dust... (Debug: {type(e).__name__}: {str(e)[:200]})"
-
-
-@app.get("/fairy/debug")
-def fairy_debug():
-    """Debug endpoint to check if the Fairy agent is configured."""
-    key = ANTHROPIC_API_KEY
-    return {
-        "key_set": bool(key),
-        "key_prefix": key[:12] + "..." if key else "NOT SET",
-        "key_length": len(key) if key else 0,
-    }
+        logging.error(f"Fairy agent error: {type(e).__name__}: {str(e)[:500]}")
+        return "Something flickered in the fairy dust... give it another try 🧚‍♀️"
 
 
 @app.post("/fairy/ask")
@@ -2682,8 +2680,10 @@ CHART DATA FOR THIS USER:
         messages = []
         if req.conversation:
             for msg in req.conversation[-10:]:  # Keep last 10 messages for context
-                if msg.get("role") in ("user", "assistant") and msg.get("content"):
-                    messages.append({"role": msg["role"], "content": msg["content"]})
+                role = msg.get("role")
+                content = msg.get("content")
+                if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+                    messages.append({"role": role, "content": content[:2000]})
 
         # Add current question
         messages.append({"role": "user", "content": req.question})
