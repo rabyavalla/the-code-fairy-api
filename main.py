@@ -15,6 +15,7 @@ Endpoints:
 import os
 import logging
 from datetime import datetime, timezone, timedelta
+from typing import Optional, List
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -81,14 +82,14 @@ class ChartRequest(BaseModel):
     minute: int = Field(0, ge=0, le=59)
     city: str = "New York"
     country: str = "US"
-    lat: float | None = None
-    lng: float | None = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
 
 
 class MoodEntry(BaseModel):
     user_id: str
     date: str  # ISO date
-    emotions: list[str]  # list of selected emotions
+    emotions: List[str]  # list of selected emotions
     notes: str = ""
     moon_sign: str = ""
     moon_house: int = 0
