@@ -13,13 +13,21 @@ Endpoints:
   GET  /forecast/eclipses     — Upcoming eclipses (next 12 months)
   POST /forecast/aspects      — Major upcoming aspects (next 90 days)
   POST /forecast/personal     — Personalized cosmic forecast
-  GET  /health             — Health check
+  GET  /forecast/lunar-phases — Current moon phase + upcoming
+  GET  /forecast/ingresses    — Upcoming sign changes
+  GET  /forecast/cosmic-news  — Current events correlated with active transits
+  GET  /health                — Health check
 """
 
 import os
+import json
+import hashlib
 import logging
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -1664,6 +1672,395 @@ def get_upcoming_ingresses():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ingress forecast failed: {str(e)}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COSMIC MIRROR — Current Events + Astrology Correlation Engine
+# ═══════════════════════════════════════════════════════════════════
+
+# Planet → mundane rulership topics (what each planet governs in world events)
+PLANET_NEWS_DOMAINS = {
+    "Mercury": {
+        "topics": ["technology", "communication", "social media", "AI", "internet",
+                    "transportation", "education", "journalism", "media"],
+        "mundane": "Communication, technology, trade, and information flow",
+        "keywords_rss": ["tech", "AI", "social media", "internet", "education", "transport"],
+    },
+    "Venus": {
+        "topics": ["economy", "markets", "fashion", "art", "culture", "relationships",
+                    "beauty", "luxury", "entertainment", "music"],
+        "mundane": "Markets, art, culture, diplomacy, and social harmony",
+        "keywords_rss": ["economy", "markets", "culture", "fashion", "entertainment"],
+    },
+    "Mars": {
+        "topics": ["military", "conflict", "sports", "competition", "defense",
+                    "violence", "energy", "industry", "protest"],
+        "mundane": "Conflict, military action, competition, and collective drive",
+        "keywords_rss": ["military", "conflict", "war", "sports", "protest", "energy"],
+    },
+    "Jupiter": {
+        "topics": ["law", "religion", "philosophy", "higher education", "international",
+                    "expansion", "growth", "travel", "immigration", "optimism"],
+        "mundane": "Law, religion, international relations, and collective optimism",
+        "keywords_rss": ["law", "court", "international", "religion", "university", "immigration"],
+    },
+    "Saturn": {
+        "topics": ["government", "regulation", "infrastructure", "austerity",
+                    "institutions", "authority", "restriction", "aging", "tradition"],
+        "mundane": "Government, institutions, regulation, and structural reform",
+        "keywords_rss": ["government", "regulation", "infrastructure", "policy", "institution"],
+    },
+    "Uranus": {
+        "topics": ["revolution", "technology", "disruption", "innovation", "freedom",
+                    "rebellion", "earthquake", "electricity", "space", "crypto"],
+        "mundane": "Revolution, technological breakthroughs, sudden change, and liberation",
+        "keywords_rss": ["revolution", "innovation", "breakthrough", "crypto", "space", "disruption"],
+    },
+    "Neptune": {
+        "topics": ["pandemic", "ocean", "pharmaceutical", "film", "music", "spirituality",
+                    "scandal", "deception", "oil", "drugs", "compassion", "mental health"],
+        "mundane": "Collective dreams, illusion/disillusion, spirituality, and the unseen",
+        "keywords_rss": ["pharmaceutical", "ocean", "film", "scandal", "mental health", "spiritual"],
+    },
+    "Pluto": {
+        "topics": ["power", "corruption", "transformation", "death", "rebirth",
+                    "nuclear", "underground", "wealth inequality", "control", "surveillance"],
+        "mundane": "Power dynamics, transformation, hidden forces, and societal rebirth",
+        "keywords_rss": ["power", "corruption", "nuclear", "wealth", "surveillance", "transformation"],
+    },
+}
+
+# Sign → mundane themes (what area of life the sign activates in world events)
+SIGN_MUNDANE_THEMES = {
+    "Aries": "identity, independence, military action, new beginnings in leadership",
+    "Taurus": "economy, banking, agriculture, material resources, environmental stability",
+    "Gemini": "media, communication networks, education policy, local communities",
+    "Cancer": "homeland, housing, food security, family policy, emotional wellbeing",
+    "Leo": "leadership, entertainment, children, creative expression, national pride",
+    "Virgo": "healthcare, labor, daily systems, public health, service industries",
+    "Libra": "diplomacy, justice system, partnerships between nations, social equality",
+    "Scorpio": "shared resources, debt, insurance, taboos, power beneath the surface",
+    "Sagittarius": "international law, religion, higher education, publishing, travel policy",
+    "Capricorn": "government structures, corporations, tradition, authority, long-term planning",
+    "Aquarius": "technology, social movements, humanitarian causes, collective consciousness",
+    "Pisces": "healthcare, spirituality, compassion fatigue, oceans, film/music/art",
+}
+
+# RSS feeds (free, no API key) — diverse, reliable sources
+RSS_FEEDS = [
+    {"url": "https://feeds.bbci.co.uk/news/world/rss.xml", "source": "BBC World"},
+    {"url": "https://feeds.bbci.co.uk/news/technology/rss.xml", "source": "BBC Tech"},
+    {"url": "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml", "source": "BBC Science"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", "source": "NYT World"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml", "source": "NYT Tech"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml", "source": "NYT Science"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml", "source": "NYT Business"},
+    {"url": "https://www.theguardian.com/world/rss", "source": "Guardian World"},
+    {"url": "http://feeds.reuters.com/reuters/topNews", "source": "Reuters"},
+    {"url": "https://feeds.npr.org/1001/rss.xml", "source": "NPR News"},
+]
+
+# Simple in-memory cache for RSS fetches (refresh every 30 min)
+_news_cache = {"data": None, "fetched_at": None}
+_cosmic_news_cache = {"data": None, "fetched_at": None}
+
+def _fetch_rss_articles(max_per_feed=15):
+    """Fetch articles from RSS feeds. Returns list of {title, description, source, published, link}."""
+    now = datetime.now(timezone.utc)
+
+    # Return cache if fresh (< 30 min old)
+    if _news_cache["data"] and _news_cache["fetched_at"]:
+        age = (now - _news_cache["fetched_at"]).total_seconds()
+        if age < 1800:
+            return _news_cache["data"]
+
+    articles = []
+    for feed in RSS_FEEDS:
+        try:
+            req = Request(feed["url"], headers={"User-Agent": "TheCodeFairy/2.0 AstrologyApp"})
+            with urlopen(req, timeout=8) as resp:
+                raw = resp.read()
+
+            root = ET.fromstring(raw)
+
+            # Handle both RSS 2.0 and Atom formats
+            items = root.findall(".//item")
+            if not items:
+                # Try Atom format
+                ns = {"atom": "http://www.w3.org/2005/Atom"}
+                items = root.findall(".//atom:entry", ns)
+
+            count = 0
+            for item in items:
+                if count >= max_per_feed:
+                    break
+
+                # RSS 2.0 format
+                title_el = item.find("title")
+                desc_el = item.find("description")
+                link_el = item.find("link")
+                pub_el = item.find("pubDate")
+
+                # Atom fallback
+                if title_el is None:
+                    ns = {"atom": "http://www.w3.org/2005/Atom"}
+                    title_el = item.find("atom:title", ns)
+                    desc_el = item.find("atom:summary", ns)
+                    link_el = item.find("atom:link", ns)
+
+                title = title_el.text.strip() if title_el is not None and title_el.text else ""
+                desc = desc_el.text.strip() if desc_el is not None and desc_el.text else ""
+                link = ""
+                if link_el is not None:
+                    link = link_el.text.strip() if link_el.text else link_el.get("href", "")
+                pub = pub_el.text.strip() if pub_el is not None and pub_el.text else ""
+
+                # Strip HTML from description
+                import re
+                desc = re.sub(r'<[^>]+>', '', desc)
+                if len(desc) > 300:
+                    desc = desc[:297] + "..."
+
+                if title:
+                    articles.append({
+                        "title": title,
+                        "description": desc,
+                        "source": feed["source"],
+                        "published": pub,
+                        "link": link,
+                    })
+                    count += 1
+
+        except Exception as e:
+            logging.warning(f"Failed to fetch RSS from {feed['source']}: {e}")
+            continue
+
+    _news_cache["data"] = articles
+    _news_cache["fetched_at"] = now
+    return articles
+
+
+def _score_article_for_planet(article, planet_key):
+    """Score how relevant an article is to a planet's domain. Returns 0-100."""
+    domains = PLANET_NEWS_DOMAINS.get(planet_key, {})
+    topics = domains.get("topics", [])
+    keywords = domains.get("keywords_rss", [])
+
+    text = (article["title"] + " " + article["description"]).lower()
+    score = 0
+
+    # Keyword matching
+    for kw in keywords:
+        if kw.lower() in text:
+            score += 15
+
+    for topic in topics:
+        if topic.lower() in text:
+            score += 10
+
+    # Cap at 100
+    return min(score, 100)
+
+
+def _get_active_transits_for_news():
+    """Get currently active astrological events that should correlate with news."""
+    now = datetime.now(timezone.utc).date()
+    active_events = []
+
+    # Active retrogrades
+    for planet, start_str, end_str, sign_start, sign_end in RETROGRADE_DATA:
+        start = datetime.strptime(start_str, "%Y-%m-%d").date()
+        end = datetime.strptime(end_str, "%Y-%m-%d").date()
+        if start <= now <= end:
+            active_events.append({
+                "type": "retrograde",
+                "planet": planet,
+                "sign": sign_start,
+                "label": f"{planet} Retrograde in {sign_start}",
+                "energy": RETROGRADE_THEMES.get(planet, {}).get("energy", ""),
+            })
+
+    # Current planetary positions from Kerykeion (today's sky)
+    try:
+        today = datetime.now(timezone.utc)
+        sky = AstrologicalSubject(
+            "Now", today.year, today.month, today.day,
+            today.hour, today.minute,
+            lng=0, lat=51.5, city="London", nation="GB"
+        )
+        outer_planets = ["Jupiter", "Saturn", "Uranus", "Neptune", "Pluto"]
+        for p in outer_planets:
+            pdata = getattr(sky, p.lower(), None) if hasattr(sky, p.lower()) else None
+            if pdata is None:
+                pdata = getattr(sky, f"{p.lower()}_data", None)
+            if pdata:
+                sign = pdata.get("sign", "") if isinstance(pdata, dict) else getattr(pdata, "sign", "")
+                if sign:
+                    active_events.append({
+                        "type": "transit",
+                        "planet": p,
+                        "sign": sign,
+                        "label": f"{p} in {sign}",
+                        "energy": f"{p} transiting {sign} — activating themes of {SIGN_MUNDANE_THEMES.get(sign, 'collective evolution')}",
+                    })
+    except Exception as e:
+        logging.warning(f"Could not get current sky for news correlation: {e}")
+
+    # Upcoming eclipses within 14 days (the "eclipse window")
+    for entry in ECLIPSE_DATA:
+        edate = datetime.strptime(entry["date"], "%Y-%m-%d").date()
+        days_until = (edate - now).days
+        if -3 <= days_until <= 14:
+            active_events.append({
+                "type": "eclipse",
+                "planet": "Moon" if "lunar" in entry["type"].lower() else "Sun",
+                "sign": entry["sign"],
+                "label": f'{entry["type"].replace("_", " ").title()} in {entry["sign"]}',
+                "energy": f"Eclipse season — fated events, revelations, and turning points around {SIGN_MUNDANE_THEMES.get(entry['sign'], 'collective themes')}",
+            })
+
+    return active_events
+
+
+def _generate_cosmic_interpretation(planet, sign, article_title, transit_type):
+    """Generate an astrological interpretation connecting a news event to a transit."""
+    planet_domain = PLANET_NEWS_DOMAINS.get(planet, {}).get("mundane", "collective forces")
+    sign_theme = SIGN_MUNDANE_THEMES.get(sign, "collective evolution")
+
+    if transit_type == "retrograde":
+        templates = [
+            f"With {planet} retrograde in {sign}, we're collectively revisiting themes of {sign_theme}. This story reflects that energy — old patterns resurfacing for review.",
+            f"{planet} retrograde asks us to look backward before moving forward. In {sign}, the focus is on {sign_theme} — and the world is responding in kind.",
+            f"The reversal energy of {planet} retrograde in {sign} manifests in how we're collectively re-examining {planet_domain.lower()}.",
+        ]
+    elif transit_type == "eclipse":
+        templates = [
+            f"Eclipse energy in {sign} activates fated events around {sign_theme}. This headline mirrors the cosmic acceleration — things are moving fast.",
+            f"During eclipse season in {sign}, hidden truths surface. The cosmic spotlight is on {sign_theme}, and the world stage reflects it.",
+            f"Eclipses in {sign} catalyze turning points in {sign_theme}. What's happening now carries echoes of a larger cosmic narrative.",
+        ]
+    else:
+        templates = [
+            f"{planet} in {sign} channels its energy through {sign_theme}. This headline is a real-world echo of that transit.",
+            f"As {planet} moves through {sign}, it activates collective themes of {sign_theme}. We see this playing out in real time.",
+            f"The {planet}-in-{sign} transit governs {planet_domain.lower()} — and this story shows how those cosmic currents manifest on Earth.",
+        ]
+
+    # Use a hash of the article title to deterministically select a template
+    idx = int(hashlib.md5(article_title.encode()).hexdigest(), 16) % len(templates)
+    return templates[idx]
+
+
+@app.get("/forecast/cosmic-news")
+def get_cosmic_news():
+    """
+    The Cosmic Mirror — correlates current world events with active astrological transits.
+    Fetches news from RSS feeds, scores them against planetary domains,
+    and returns the most astrologically relevant stories with interpretations.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+
+        # Return cache if fresh (< 15 min)
+        if _cosmic_news_cache["data"] and _cosmic_news_cache["fetched_at"]:
+            age = (now - _cosmic_news_cache["fetched_at"]).total_seconds()
+            if age < 900:
+                return _cosmic_news_cache["data"]
+
+        # 1. Get active astrological events
+        active_events = _get_active_transits_for_news()
+
+        # 2. Fetch current news
+        articles = _fetch_rss_articles(max_per_feed=12)
+
+        if not articles:
+            return {
+                "success": True,
+                "timestamp": now.isoformat(),
+                "cosmic_mirror": [],
+                "active_sky": active_events,
+                "message": "The cosmic mirror is clear — no news feeds available right now. Try again shortly.",
+            }
+
+        # 3. Score each article against each active event
+        correlations = []
+        seen_titles = set()  # Deduplicate
+
+        for event in active_events:
+            planet = event["planet"]
+            scored = []
+            for article in articles:
+                if article["title"] in seen_titles:
+                    continue
+                score = _score_article_for_planet(article, planet)
+                if score >= 15:  # Only include meaningfully relevant articles
+                    scored.append((score, article))
+
+            # Take top 2 per event
+            scored.sort(key=lambda x: -x[0])
+            for score, article in scored[:2]:
+                if article["title"] in seen_titles:
+                    continue
+                seen_titles.add(article["title"])
+
+                correlations.append({
+                    "headline": article["title"],
+                    "summary": article["description"],
+                    "source": article["source"],
+                    "link": article["link"],
+                    "transit": event["label"],
+                    "transit_type": event["type"],
+                    "planet": event["planet"],
+                    "sign": event["sign"],
+                    "relevance_score": score,
+                    "cosmic_interpretation": _generate_cosmic_interpretation(
+                        event["planet"], event["sign"], article["title"], event["type"]
+                    ),
+                })
+
+        # Sort by relevance score, take top 8
+        correlations.sort(key=lambda x: -x["relevance_score"])
+        correlations = correlations[:8]
+
+        # 4. Generate a daily "cosmic weather" summary
+        retrogrades = [e for e in active_events if e["type"] == "retrograde"]
+        eclipses = [e for e in active_events if e["type"] == "eclipse"]
+        major_transits = [e for e in active_events if e["type"] == "transit"]
+
+        summary_parts = []
+        if retrogrades:
+            planets = ", ".join(r["planet"] for r in retrogrades)
+            summary_parts.append(f"{planets} {'is' if len(retrogrades) == 1 else 'are'} retrograde — a time of collective review and revision")
+        if eclipses:
+            summary_parts.append(f"Eclipse season is active — expect accelerated events and revelations")
+        if major_transits:
+            # Highlight the most notable outer planet transit
+            notable = [t for t in major_transits if t["planet"] in ("Pluto", "Neptune", "Uranus")]
+            if notable:
+                t = notable[0]
+                summary_parts.append(f"{t['planet']} in {t['sign']} is reshaping {SIGN_MUNDANE_THEMES.get(t['sign'], 'the collective')}")
+
+        daily_summary = ". ".join(summary_parts) + "." if summary_parts else "The sky is quietly holding — a moment of cosmic pause."
+
+        result = {
+            "success": True,
+            "timestamp": now.isoformat(),
+            "daily_summary": daily_summary,
+            "cosmic_mirror": correlations,
+            "active_sky": [
+                {"label": e["label"], "type": e["type"], "energy": e["energy"]}
+                for e in active_events
+            ],
+            "total_articles_scanned": len(articles),
+            "feeds_active": len(set(a["source"] for a in articles)),
+        }
+
+        _cosmic_news_cache["data"] = result
+        _cosmic_news_cache["fetched_at"] = now
+        return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cosmic news correlation failed: {str(e)}")
 
 
 # ─── Run ───────────────────────────────────────
