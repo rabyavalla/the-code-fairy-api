@@ -16,6 +16,7 @@ Endpoints:
   GET  /forecast/lunar-phases — Current moon phase + upcoming
   GET  /forecast/ingresses    — Upcoming sign changes
   GET  /forecast/cosmic-news  — Current events correlated with active transits
+  POST /fairy/ask             — The Code Fairy agent (Beca's voice, chart-aware AI)
   GET  /health                — Health check
 """
 
@@ -2438,6 +2439,266 @@ def get_predictions():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction engine failed: {str(e)}")
+
+
+# ═══════════════════════════════════════════════════════
+# THE CODE FAIRY AGENT — Beca's AI Voice
+# ═══════════════════════════════════════════════════════
+
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+
+FAIRY_SYSTEM_PROMPT = """You are The Code Fairy — Beca. You're a real person who discovered that astrology IS the coding language of reality. You abandoned learning JavaScript to decode the stars, and you've read thousands of birth charts since.
+
+YOUR VOICE & PHILOSOPHY:
+- You treat astrology like code. Charts are "operating systems." Planetary placements are "functions." Aspects are "if/else statements." Transits are "software updates." Retrogrades are "debugging sessions."
+- You speak with warm authority — playful but deeply knowledgeable. You're the friend who happens to be a master astrologer.
+- You weave in coding metaphors naturally: "Your Venus in Scorpio is basically an encryption protocol for your love life" or "Saturn transiting your 10th house is a major version upgrade to your career.exe"
+- You're direct, confident, occasionally witty. Never generic. Never fluffy "the stars say good things are coming!" energy.
+- You believe everyone was born with a unique energetic blueprint — it's the code to their personal operating system. Understanding it means gaining the ability to consciously write your reality.
+- You use both tropical AND sidereal perspectives when relevant, because "most apps show you one chart — we show you both."
+
+RULES:
+- Always reference the user's ACTUAL chart data when provided. Be specific: mention their exact placements, degrees, houses.
+- When discussing transits, explain what's ACTUALLY happening in the sky and how it connects to THEIR specific natal positions.
+- Keep responses conversational — 2-4 paragraphs max unless they ask for deep analysis.
+- If they ask something you need chart data for and don't have it, tell them warmly to make sure their birth data is saved.
+- Never make up placements. Only reference what's in the chart context provided.
+- You can discuss general astrology concepts without chart data, but always bring it back to their chart when possible.
+- Use occasional emojis sparingly (✨, 🧚‍♀️, 💫) but don't overdo it.
+
+WHAT YOU KNOW:
+- Deep traditional + modern astrology (houses, aspects, dignities, sect, profections, transits, progressions, synastry concepts)
+- Mundane astrology (how planetary cycles correlate with world events)
+- Both tropical and sidereal zodiac systems
+- Planetary cycles (Saturn return, Jupiter return, nodal returns, etc.)
+- Eclipse mechanics and their significance
+- Retrograde meaning and mechanics for all planets"""
+
+
+class FairyAskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+    name: Optional[str] = "User"
+    year: Optional[int] = None
+    month: Optional[int] = None
+    day: Optional[int] = None
+    hour: Optional[int] = None
+    minute: Optional[int] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    conversation: Optional[List[dict]] = None  # [{role: "user"/"assistant", content: "..."}]
+
+
+def _build_chart_context(req: FairyAskRequest) -> str:
+    """Gather the user's full astrological context for The Code Fairy."""
+    if not req.year or not req.month or not req.day:
+        return "No birth data available. The user hasn't provided their birth details yet."
+
+    try:
+        natal = AstrologicalSubject(
+            req.name or "User", req.year, req.month, req.day,
+            req.hour or 12, req.minute or 0,
+            req.city or "New York", req.country or "US",
+            zodiac_type="Tropic",
+        )
+
+        now = datetime.now(timezone.utc)
+        transits = AstrologicalSubject(
+            "Transit", now.year, now.month, now.day, now.hour, now.minute,
+            "Greenwich", "GB", zodiac_type="Tropic",
+        )
+
+        # Build natal chart summary
+        natal_chart = build_chart(natal)
+        planets_text = []
+        for p in natal_chart.get("planets", []):
+            house_info = f" in House {p['house']}" if p.get("house") else ""
+            retro = " (retrograde)" if p.get("retrograde") else ""
+            planets_text.append(f"  {p['name']}: {p['sign']} {p.get('degree_formatted', '')}{house_info}{retro}")
+
+        houses_text = []
+        for h in natal_chart.get("houses", []):
+            houses_text.append(f"  {h['name']}: {h['sign']} {h.get('degree_formatted', '')}")
+
+        # Current transits
+        transit_planets = []
+        natal_houses = get_all_house_cusps(natal)
+        for pname in ["sun", "moon", "mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune", "pluto"]:
+            tp = getattr(transits, pname, None)
+            if tp:
+                t_sign = SIGN_MAP.get(tp.sign, tp.sign) if hasattr(tp, 'sign') else "?"
+                t_abs = getattr(tp, 'abs_pos', 0)
+                t_house = get_planet_house(t_abs, natal_houses)
+                retro = " (retrograde)" if getattr(tp, 'retrograde', False) else ""
+                transit_planets.append(f"  Transit {tp.name}: {t_sign} → your House {t_house}{retro}")
+
+        # Current transit aspects to natal
+        aspect_lines = []
+        for t_name in ["sun", "moon", "mercury", "venus", "mars", "jupiter", "saturn", "uranus", "neptune", "pluto"]:
+            tp = getattr(transits, t_name, None)
+            if not tp:
+                continue
+            t_abs = getattr(tp, 'abs_pos', 0)
+            for n_name in ["sun", "moon", "mercury", "venus", "mars", "jupiter", "saturn"]:
+                np_obj = getattr(natal, n_name, None)
+                if not np_obj:
+                    continue
+                n_abs = getattr(np_obj, 'abs_pos', 0)
+                aspects = get_major_aspects(t_abs, n_abs, tp.name, np_obj.name)
+                for a in aspects:
+                    if a["orb"] <= 4:
+                        aspect_lines.append(f"  Transit {a['transit_planet']} {a['aspect_type']} Natal {a['natal_planet']} (orb: {a['orb']}°)")
+
+        # Moon phase
+        sun_abs = getattr(transits.sun, 'abs_pos', 0) if hasattr(transits, 'sun') else 0
+        moon_abs = getattr(transits.moon, 'abs_pos', 0) if hasattr(transits, 'moon') else 0
+        moon_phase = calculate_moon_phase(sun_abs, moon_abs)
+
+        # Active retrogrades
+        today = now.date()
+        active_retros = []
+        for planet, start_str, end_str, sign_start, sign_end in RETROGRADE_DATA:
+            start = datetime.strptime(start_str, "%Y-%m-%d").date()
+            end = datetime.strptime(end_str, "%Y-%m-%d").date()
+            if start <= today <= end:
+                active_retros.append(f"  {planet} retrograde in {sign_start} ({start_str} to {end_str})")
+
+        time_note = ""
+        if req.hour is None:
+            time_note = "\n⚠️ No birth time provided — house placements are estimated using noon."
+
+        context = f"""═══ {req.name or 'User'}'s NATAL CHART (Tropical) ═══{time_note}
+Born: {req.year}-{req.month:02d}-{req.day:02d} at {req.hour or 12}:{req.minute or 0:02d}
+Location: {req.city or 'Unknown'}, {req.country or 'Unknown'}
+
+NATAL PLANETS:
+{chr(10).join(planets_text)}
+
+HOUSE CUSPS:
+{chr(10).join(houses_text)}
+
+═══ CURRENT SKY ({now.strftime('%B %d, %Y')}) ═══
+Moon Phase: {moon_phase.get('phase_name', 'unknown')} ({moon_phase.get('illumination', 0):.0f}% illuminated)
+
+TRANSITS THROUGH YOUR HOUSES:
+{chr(10).join(transit_planets)}
+
+ACTIVE TRANSIT ASPECTS TO YOUR NATAL CHART:
+{chr(10).join(aspect_lines) if aspect_lines else '  No tight aspects within 4° orb right now.'}
+
+ACTIVE RETROGRADES:
+{chr(10).join(active_retros) if active_retros else '  No planets currently retrograde.'}"""
+
+        return context
+
+    except Exception as e:
+        return f"Chart calculation error: {str(e)}. Birth data may be incomplete."
+
+
+def _call_anthropic(system: str, messages: list) -> str:
+    """Call Anthropic Messages API directly via urllib."""
+    if not ANTHROPIC_API_KEY:
+        logging.error("ANTHROPIC_API_KEY is not set")
+        return "The Code Fairy is still getting her wings set up ✨ The API key hasn't been configured yet. Check back soon!"
+
+    logging.error(f"[Fairy] Calling Anthropic API with key starting: {ANTHROPIC_API_KEY[:12]}...")
+
+    payload = json.dumps({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "system": system,
+        "messages": messages,
+    }).encode("utf-8")
+
+    req = Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+
+    try:
+        with urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            # Extract text from content blocks
+            text_parts = []
+            for block in data.get("content", []):
+                if block.get("type") == "text":
+                    text_parts.append(block["text"])
+            return "\n".join(text_parts) if text_parts else "The stars are quiet right now... try asking again 💫"
+    except URLError as e:
+        # Read the error response body for details
+        error_body = ""
+        if hasattr(e, 'read'):
+            try:
+                error_body = e.read().decode("utf-8")
+            except Exception:
+                pass
+        elif hasattr(e, 'reason'):
+            error_body = str(e.reason)
+        logging.error(f"Anthropic API URLError: {e} | Body: {error_body}")
+        return f"The cosmic signal got a little scrambled ✨ (Debug: {error_body[:200] if error_body else str(e)})"
+    except Exception as e:
+        logging.error(f"Fairy agent error: {type(e).__name__}: {e}")
+        return f"Something flickered in the fairy dust... (Debug: {type(e).__name__}: {str(e)[:200]})"
+
+
+@app.get("/fairy/debug")
+def fairy_debug():
+    """Debug endpoint to check if the Fairy agent is configured."""
+    key = ANTHROPIC_API_KEY
+    return {
+        "key_set": bool(key),
+        "key_prefix": key[:12] + "..." if key else "NOT SET",
+        "key_length": len(key) if key else 0,
+    }
+
+
+@app.post("/fairy/ask")
+def fairy_ask(req: FairyAskRequest):
+    """
+    The Code Fairy Agent — Beca's AI-powered astrology assistant.
+    Gathers the user's full natal chart + current transits, then responds
+    in Beca's voice using Claude.
+    """
+    try:
+        # Build astrological context
+        chart_context = _build_chart_context(req)
+
+        # Build the full system prompt with chart data
+        full_system = f"""{FAIRY_SYSTEM_PROMPT}
+
+═══════════════════════════════════════
+CHART DATA FOR THIS USER:
+═══════════════════════════════════════
+{chart_context}"""
+
+        # Build conversation history
+        messages = []
+        if req.conversation:
+            for msg in req.conversation[-10:]:  # Keep last 10 messages for context
+                if msg.get("role") in ("user", "assistant") and msg.get("content"):
+                    messages.append({"role": msg["role"], "content": msg["content"]})
+
+        # Add current question
+        messages.append({"role": "user", "content": req.question})
+
+        # Call Claude
+        response_text = _call_anthropic(full_system, messages)
+
+        return {
+            "success": True,
+            "response": response_text,
+            "has_chart": req.year is not None,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"The Code Fairy encountered an error: {str(e)}")
 
 
 # ─── Run ───────────────────────────────────────
